@@ -1,5 +1,6 @@
 import os
 import time
+import html
 import base64
 import datetime
 from email.message import EmailMessage
@@ -61,45 +62,80 @@ DRIVE_SERVICE = build("drive", "v3", credentials=CREDS)
 TASKS_SERVICE = build("tasks", "v1", credentials=CREDS)
 
 
+def build_html_email(subject: str, clean_body: str) -> str:
+    """Wraps the email text inside a clean, responsive professional HTML card."""
+    paragraphs = [p.strip() for p in clean_body.split("\n\n") if p.strip()]
+    html_paragraphs = "".join(
+        f'<p style="margin: 0 0 14px 0; line-height: 1.6; color: #1f2937; font-size: 15px;">'
+        f'{html.escape(p).replace(chr(10), "<br>")}</p>'
+        for p in paragraphs
+    )
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+</head>
+<body style="margin: 0; padding: 24px; background-color: #f4f6f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 10px; border: 1px solid #e5e7eb; overflow: hidden;">
+    <tr>
+      <td style="height: 4px; background-color: #2563eb;"></td>
+    </tr>
+    <tr>
+      <td style="padding: 28px 32px;">
+        {html_paragraphs}
+        <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb;">
+          <p style="margin: 0; font-size: 14px; color: #6b7280;">Best regards,</p>
+          <p style="margin: 4px 0 0 0; font-size: 15px; font-weight: 600; color: #111827;">Dhiraj Kumar</p>
+        </div>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
 def send_email(to_email: str, subject: str, body: str) -> str:
-    """Drafts and sends a properly formatted email via the user's Gmail account.
+    """Drafts and sends a clean HTML + plain-text email via Gmail.
 
     Args:
-        to_email: The recipient's email address (e.g., 'friend@example.com').
-        subject: A clear, descriptive, professional subject line.
-        body: The polite, well-structured email body with proper paragraph breaks.
+        to_email: The recipient's email address.
+        subject: A concise, professional subject line.
+        body: Concise, polite body text (do NOT include sign-off; the HTML template adds it automatically).
     """
-    # Convert any escaped '\n' strings from the model into real line breaks
     clean_body = body.replace("\\n", "\n").strip()
     clean_subject = subject.strip()
 
     print("\n" + "=" * 55, flush=True)
-    print("EMAIL DRAFT PREVIEW", flush=True)
+    print("EMAIL DRAFT PREVIEW (Will be sent as styled HTML)", flush=True)
     print("=" * 55, flush=True)
     print(f"To:      {to_email}", flush=True)
     print(f"Subject: {clean_subject}", flush=True)
     print("-" * 55, flush=True)
     print(clean_body, flush=True)
+    print("\nBest regards,\nDhiraj Kumar", flush=True)
     print("=" * 55, flush=True)
 
     confirm = input("Approve and send this email? (y/n): ").strip().lower()
     if confirm != "y":
-        return "Email cancelled by user. Ask if they want any edits to the draft."
+        return "Email cancelled by user. Ask if they want any edits."
 
     message = EmailMessage()
-    message.set_content(clean_body)
     message["To"] = to_email
     message["Subject"] = clean_subject
 
+    # Plain-text fallback + Styled HTML version
+    plain_full = f"{clean_body}\n\nBest regards,\nDhiraj Kumar"
+    html_full = build_html_email(clean_subject, clean_body)
+
+    message.set_content(plain_full)
+    message.add_alternative(html_full, subtype="html")
+
     encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    sent = (
-        GMAIL_SERVICE.users()
-        .messages()
-        .send(userId="me", body={"raw": encoded_message})
-        .execute()
-    )
-    print("-> Sent via Gmail API!", flush=True)
-    return f"Email successfully sent to {to_email} with subject '{clean_subject}'."
+    GMAIL_SERVICE.users().messages().send(userId="me", body={"raw": encoded_message}).execute()
+
+    print("-> Styled HTML email sent via Gmail API!", flush=True)
+    return f"HTML email successfully sent to {to_email} with subject '{clean_subject}'."
 
 
 def fetch_workspace_context() -> dict:
@@ -160,17 +196,12 @@ def main():
     system_prompt = f"""
     You are D25, the personal AI assistant for Dhiraj Kumar.
 
-    EMAIL WRITING & SENDING RULES:
-    Whenever the user asks to send an email, you MUST invoke the `send_email` tool directly (which handles user approval before sending).
-    Follow these strict formatting standards for every email:
-    1. Subject Line: Write a clear, descriptive, professional subject line tailored to the email's purpose.
-    2. Tone & Length: Use a polite, warm, and medium-length professional tone (2 to 3 well-structured paragraphs—never a single blunt sentence).
-    3. Structure:
-       - Polite greeting (e.g., "Dear [Name]," or "Hello [Name],")
-       - Opening paragraph stating the purpose clearly
-       - Body paragraph with complete, courteous details and a clear call to action or next step
-       - Professional closing ("Best regards," followed by "Dhiraj Kumar")
-    4. Use actual newline breaks between paragraphs.
+    STRICT EMAIL DRAFTING RULES:
+    Whenever the user asks to send an email, call `send_email` directly.
+    1. Stick strictly to the exact points the user provided—polish them into clean, polite, professional phrasing, but NEVER invent extra excuses, filler sentences, or unrequested details unless the user explicitly says "explain it" or "write in detail".
+    2. Keep emails crisp and concise (greeting + 1 short, clear paragraph).
+    3. Write a clear, professional `subject` line.
+    4. Do NOT add "Best regards, Dhiraj Kumar" at the end of `body` because the HTML template automatically appends the signature block.
 
     Live Google Workspace snapshot:
     - Recent Emails: {context['emails']}
