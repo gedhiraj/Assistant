@@ -63,10 +63,10 @@ TASKS_SERVICE = build("tasks", "v1", credentials=CREDS)
 
 
 def build_html_email(subject: str, clean_body: str) -> str:
-    """Wraps the email text inside a clean, responsive professional HTML card."""
+    """Clean, native-looking editorial HTML that reads like a genuine 1-to-1 human email."""
     paragraphs = [p.strip() for p in clean_body.split("\n\n") if p.strip()]
     html_paragraphs = "".join(
-        f'<p style="margin: 0 0 14px 0; line-height: 1.6; color: #1f2937; font-size: 15px;">'
+        f'<p style="margin: 0 0 16px 0; line-height: 1.65; color: #1f2328; font-size: 15px;">'
         f'{html.escape(p).replace(chr(10), "<br>")}</p>'
         for p in paragraphs
     )
@@ -75,19 +75,20 @@ def build_html_email(subject: str, clean_body: str) -> str:
 <html>
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
-<body style="margin: 0; padding: 24px; background-color: #f4f6f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 10px; border: 1px solid #e5e7eb; overflow: hidden;">
+<body style="margin: 0; padding: 32px 24px; background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0">
     <tr>
-      <td style="height: 4px; background-color: #2563eb;"></td>
-    </tr>
-    <tr>
-      <td style="padding: 28px 32px;">
-        {html_paragraphs}
-        <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb;">
-          <p style="margin: 0; font-size: 14px; color: #6b7280;">Best regards,</p>
-          <p style="margin: 4px 0 0 0; font-size: 15px; font-weight: 600; color: #111827;">Dhiraj Kumar</p>
-        </div>
+      <td align="left">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 580px;">
+          <tr>
+            <td>
+              {html_paragraphs}
+              <p style="margin: 28px 0 0 0; font-size: 15px; font-weight: 600; color: #111827;">Dhiraj Kumar</p>
+            </td>
+          </tr>
+        </table>
       </td>
     </tr>
   </table>
@@ -100,20 +101,20 @@ def send_email(to_email: str, subject: str, body: str) -> str:
 
     Args:
         to_email: The recipient's email address.
-        subject: A concise, professional subject line.
-        body: Concise, polite body text (do NOT include sign-off; the HTML template adds it automatically).
+        subject: A concise, natural, sentence-case subject line.
+        body: Concise, polite, natural body text (do NOT include sign-off; the HTML template adds it automatically).
     """
     clean_body = body.replace("\\n", "\n").strip()
     clean_subject = subject.strip()
 
     print("\n" + "=" * 55, flush=True)
-    print("EMAIL DRAFT PREVIEW (Will be sent as styled HTML)", flush=True)
+    print("EMAIL DRAFT PREVIEW (Human-Style Editorial HTML)", flush=True)
     print("=" * 55, flush=True)
     print(f"To:      {to_email}", flush=True)
     print(f"Subject: {clean_subject}", flush=True)
     print("-" * 55, flush=True)
     print(clean_body, flush=True)
-    print("\nBest regards,\nDhiraj Kumar", flush=True)
+    print("\nDhiraj Kumar", flush=True)
     print("=" * 55, flush=True)
 
     confirm = input("Approve and send this email? (y/n): ").strip().lower()
@@ -125,7 +126,7 @@ def send_email(to_email: str, subject: str, body: str) -> str:
     message["Subject"] = clean_subject
 
     # Plain-text fallback + Styled HTML version
-    plain_full = f"{clean_body}\n\nBest regards,\nDhiraj Kumar"
+    plain_full = f"{clean_body}\n\nDhiraj Kumar"
     html_full = build_html_email(clean_subject, clean_body)
 
     message.set_content(plain_full)
@@ -134,8 +135,8 @@ def send_email(to_email: str, subject: str, body: str) -> str:
     encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
     GMAIL_SERVICE.users().messages().send(userId="me", body={"raw": encoded_message}).execute()
 
-    print("-> Styled HTML email sent via Gmail API!", flush=True)
-    return f"HTML email successfully sent to {to_email} with subject '{clean_subject}'."
+    print("-> Email sent via Gmail API!", flush=True)
+    return f"Email successfully sent to {to_email} with subject '{clean_subject}'."
 
 
 def fetch_workspace_context() -> dict:
@@ -196,12 +197,13 @@ def main():
     system_prompt = f"""
     You are D25, the personal AI assistant for Dhiraj Kumar.
 
-    STRICT EMAIL DRAFTING RULES:
+    HUMAN-LIKE EMAIL WRITING RULES:
     Whenever the user asks to send an email, call `send_email` directly.
-    1. Stick strictly to the exact points the user provided—polish them into clean, polite, professional phrasing, but NEVER invent extra excuses, filler sentences, or unrequested details unless the user explicitly says "explain it" or "write in detail".
-    2. Keep emails crisp and concise (greeting + 1 short, clear paragraph).
-    3. Write a clear, professional `subject` line.
-    4. Do NOT add "Best regards, Dhiraj Kumar" at the end of `body` because the HTML template automatically appends the signature block.
+    1. Sound completely human, natural, and polite—never robotic or overly formal.
+    2. NEVER use AI clichés such as "I hope this email finds you well", "I am writing to inform you", "pleased to confirm", or "at your earliest convenience".
+    3. Use natural contractions (e.g., "I'm", "it's", "let's") and keep the message concise—stick strictly to the user's exact points without inventing extra details unless asked to explain.
+    4. Write a natural, sentence-case subject line (e.g., "Quick check on email automation").
+    5. Do NOT add a sign-off ("Best regards, Dhiraj Kumar") at the end of `body`—the HTML template adds Dhiraj's signature automatically.
 
     Live Google Workspace snapshot:
     - Recent Emails: {context['emails']}
