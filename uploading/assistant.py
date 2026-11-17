@@ -29,7 +29,6 @@ SCOPES = [
     "https://www.googleapis.com/auth/contacts.readonly",
 ]
 
-# Models to try in order if one hits a temporary 503 overload
 FALLBACK_MODELS = [
     "gemini-3.5-flash-lite",
     "gemini-3.8-flash",
@@ -63,26 +62,34 @@ TASKS_SERVICE = build("tasks", "v1", credentials=CREDS)
 
 
 def send_email(to_email: str, subject: str, body: str) -> str:
-    """Sends an email via the user's Gmail account.
+    """Drafts and sends a properly formatted email via the user's Gmail account.
 
     Args:
         to_email: The recipient's email address (e.g., 'friend@example.com').
-        subject: The subject line of the email.
-        body: The plain-text body content of the email.
+        subject: A clear, descriptive, professional subject line.
+        body: The polite, well-structured email body with proper paragraph breaks.
     """
-    print(f"\n[Action Request] D25 wants to send an email:", flush=True)
-    print(f"  To:      {to_email}", flush=True)
-    print(f"  Subject: {subject}", flush=True)
-    print(f"  Body:    {body}", flush=True)
-    confirm = input("Approve and send? (y/n): ").strip().lower()
+    # Convert any escaped '\n' strings from the model into real line breaks
+    clean_body = body.replace("\\n", "\n").strip()
+    clean_subject = subject.strip()
 
+    print("\n" + "=" * 55, flush=True)
+    print("EMAIL DRAFT PREVIEW", flush=True)
+    print("=" * 55, flush=True)
+    print(f"To:      {to_email}", flush=True)
+    print(f"Subject: {clean_subject}", flush=True)
+    print("-" * 55, flush=True)
+    print(clean_body, flush=True)
+    print("=" * 55, flush=True)
+
+    confirm = input("Approve and send this email? (y/n): ").strip().lower()
     if confirm != "y":
-        return "Email cancelled by user."
+        return "Email cancelled by user. Ask if they want any edits to the draft."
 
     message = EmailMessage()
-    message.set_content(body)
+    message.set_content(clean_body)
     message["To"] = to_email
-    message["Subject"] = subject
+    message["Subject"] = clean_subject
 
     encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
     sent = (
@@ -92,7 +99,7 @@ def send_email(to_email: str, subject: str, body: str) -> str:
         .execute()
     )
     print("-> Sent via Gmail API!", flush=True)
-    return f"Email successfully sent to {to_email} (Message ID: {sent['id']})."
+    return f"Email successfully sent to {to_email} with subject '{clean_subject}'."
 
 
 def fetch_workspace_context() -> dict:
@@ -121,7 +128,6 @@ def fetch_workspace_context() -> dict:
 
 
 def send_with_fallback(ai_client: genai.Client, system_prompt: str, history: list, user_input: str):
-    """Tries multiple Gemini models automatically if one returns a 503 overload."""
     last_error = None
     for model_name in FALLBACK_MODELS:
         try:
@@ -152,8 +158,19 @@ def main():
     ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
     system_prompt = f"""
-    You are D25, a personal AI assistant connected to the user's Google account.
-    You MUST call the `send_email` tool whenever the user asks to send an email. Do not just write a draft in text—invoke `send_email` directly with `to_email`, `subject`, and `body`.
+    You are D25, the personal AI assistant for Dhiraj Kumar.
+
+    EMAIL WRITING & SENDING RULES:
+    Whenever the user asks to send an email, you MUST invoke the `send_email` tool directly (which handles user approval before sending).
+    Follow these strict formatting standards for every email:
+    1. Subject Line: Write a clear, descriptive, professional subject line tailored to the email's purpose.
+    2. Tone & Length: Use a polite, warm, and medium-length professional tone (2 to 3 well-structured paragraphs—never a single blunt sentence).
+    3. Structure:
+       - Polite greeting (e.g., "Dear [Name]," or "Hello [Name],")
+       - Opening paragraph stating the purpose clearly
+       - Body paragraph with complete, courteous details and a clear call to action or next step
+       - Professional closing ("Best regards," followed by "Dhiraj Kumar")
+    4. Use actual newline breaks between paragraphs.
 
     Live Google Workspace snapshot:
     - Recent Emails: {context['emails']}
