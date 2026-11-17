@@ -1,0 +1,11 @@
+# Google Secrets & OAuth Tokens (NEVER commit these)
+.env
+credentials.json
+token.json
+client_secret*.json
+
+# Python virtual environments & cache
+__pycache__/
+*.py[cod]
+.venv/
+venv/
