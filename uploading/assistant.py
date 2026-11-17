@@ -1,4 +1,5 @@
 import os
+import time
 import base64
 import datetime
 from email.message import EmailMessage
@@ -26,6 +27,14 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/tasks",
     "https://www.googleapis.com/auth/contacts.readonly",
+]
+
+# Models to try in order if one hits a temporary 503 overload
+FALLBACK_MODELS = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-latest",
 ]
 
 
@@ -111,14 +120,36 @@ def fetch_workspace_context() -> dict:
     return {"emails": emails, "events": events, "tasks": todo_items}
 
 
+def send_with_fallback(ai_client: genai.Client, system_prompt: str, history: list, user_input: str):
+    """Tries multiple Gemini models automatically if one returns a 503 overload."""
+    last_error = None
+    for model_name in FALLBACK_MODELS:
+        try:
+            chat = ai_client.chats.create(
+                model=model_name,
+                history=history,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    tools=[send_email],
+                ),
+            )
+            reply = chat.send_message(user_input)
+            return reply.text, chat.get_history()
+        except Exception as e:
+            last_error = e
+            if "503" in str(e) or "UNAVAILABLE" in str(e):
+                print(f"({model_name} busy, switching model...)", flush=True)
+                time.sleep(1)
+                continue
+            raise e
+    raise last_error
+
+
 def main():
     print("Fetching your latest Workspace data...", flush=True)
     context = fetch_workspace_context()
 
-    ai_client = genai.Client(
-        api_key=GEMINI_API_KEY,
-        http_options=types.HttpOptions(api_version="v1beta"),
-    )
+    ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
     system_prompt = f"""
     You are D25, a personal AI assistant connected to the user's Google account.
@@ -130,14 +161,7 @@ def main():
     - Pending Tasks: {context['tasks']}
     """
 
-    chat = ai_client.chats.create(
-        model="gemini-flash-latest",
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            tools=[send_email],
-        ),
-    )
-
+    history = []
     print("\nD25 is ready! Type 'exit' to quit.", flush=True)
     while True:
         user_input = input("\nYou: ").strip()
@@ -148,8 +172,8 @@ def main():
 
         print("D25 is thinking...", flush=True)
         try:
-            reply = chat.send_message(user_input)
-            print(f"\nD25: {reply.text}", flush=True)
+            reply_text, history = send_with_fallback(ai_client, system_prompt, history, user_input)
+            print(f"\nD25: {reply_text}", flush=True)
         except Exception as e:
             print(f"\n[Error]: {e}", flush=True)
 
