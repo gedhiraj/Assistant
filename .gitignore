@@ -2,6 +2,7 @@
 .env
 credentials.json
 token.json
+permissions.json
 client_secret*.json
 
 # Python virtual environments & cache

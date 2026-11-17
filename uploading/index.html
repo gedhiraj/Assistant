@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>d25 · Personal AI Assistant</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    :root {
+      --bg-canvas: #0d1117;
+      --bg-subtle: #161b22;
+      --bg-inset: #010409;
+      --bg-overlay: #1c2128;
+      --border-default: #30363d;
+      --border-muted: #21262d;
+      --fg-default: #e6edf3;
+      --fg-muted: #848d97;
+      --fg-accent: #2f81f7;
+      --btn-primary-bg: #238636;
+      --btn-primary-hover: #2ea043;
+      --btn-danger: #f85149;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background-color: var(--bg-canvas);
+      color: var(--fg-default);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Custom Scrollbars (GitHub Dark style) */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+
+    /* Markdown rendering inside assistant replies */
+    .markdown-body p { margin: 0 0 12px 0; line-height: 1.6; font-size: 14.5px; }
+    .markdown-body p:last-child { margin-bottom: 0; }
+    .markdown-body ul, .markdown-body ol { margin: 8px 0 12px 0; padding-left: 20px; }
+    .markdown-body li { margin-bottom: 6px; line-height: 1.55; font-size: 14.5px; }
+    .markdown-body strong { color: #f0f6fc; font-weight: 600; }
+    .markdown-body code {
+      background: rgba(110, 118, 129, 0.25);
+      padding: 2px 6px;
+      border-radius: 6px;
+      font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+      font-size: 12.5px;
+    }
+    .markdown-body a { color: #2f81f7; text-decoration: none; }
+    .markdown-body a:hover { text-decoration: underline; }
+
+    /* Spinner animation */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .animate-spin-fast { animation: spin 0.8s linear infinite; }
+  </style>
+</head>
+<body class="flex h-screen w-screen select-none">
+
+  <!-- Left Sidebar (GitHub Copilot style) -->
+  <aside id="sidebar" class="w-64 bg-[#010409] border-r border-[#30363d] flex flex-col justify-between transition-all duration-200 shrink-0">
+    <div>
+      <!-- Brand Header -->
+      <div class="h-14 px-4 flex items-center justify-between border-b border-[#21262d]">
+        <div class="flex items-center gap-2.5">
+          <div class="w-7 h-7 rounded-full bg-[#161b22] border border-[#30363d] flex items-center justify-center text-[#e6edf3]">
+            <!-- Copilot-inspired visor SVG -->
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a7 7 0 0 1 7 7v3a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-1.5a3.5 3.5 0 0 1-3.5 3.5h-4A3.5 3.5 0 0 1 6.5 18H5a2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2V9a7 7 0 0 1 7-7Z"/>
+              <circle cx="9.5" cy="12.5" r="1" fill="currentColor"/>
+              <circle cx="14.5" cy="12.5" r="1" fill="currentColor"/>
+            </svg>
+          </div>
+          <span class="font-semibold text-sm tracking-tight text-[#f0f6fc]">d25</span>
+          <span class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-[#1f6feb]/15 text-[#58a6ff] border border-[#1f6feb]/30">Workspace</span>
+        </div>
+        <button onclick="startNewChat()" title="New conversation" class="p-1.5 rounded-md text-[#848d97] hover:text-[#e6edf3] hover:bg-[#161b22] transition">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- New Thread Button -->
+      <div class="p-3">
+        <button onclick="startNewChat()" class="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-[#e6edf3] bg-[#161b22] hover:bg-[#21262d] border border-[#30363d] rounded-md transition">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" class="text-[#848d97]">
+            <path d="M1.75 1h8.5c.966 0 1.75.784 1.75 1.75v5.5A1.75 1.75 0 0 1 10.25 10H7.061l-2.574 2.573A1.458 1.458 0 0 1 2 11.543V10h-.25A1.75 1.75 0 0 1 0 8.25v-5.5C0 1.784.784 1 1.75 1ZM1.5 2.75v5.5c0 .138.112.25.25.25h1a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h3.5a.25.25 0 0 0 .25-.25v-5.5a.25.25 0 0 0-.25-.25h-8.5a.25.25 0 0 0-.25.25Z"/>
+          </svg>
+          New conversation
+        </button>
+      </div>
+
+      <!-- Recent Threads List -->
+      <div class="px-3">
+        <div class="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#848d97]">Current Session</div>
+        <div id="sessionList" class="space-y-1">
+          <div class="px-2.5 py-2 rounded-md bg-[#161b22] text-xs text-[#e6edf3] truncate border border-[#30363d]/60">
+            Gmail Assistant Active
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Sidebar Status & Permissions Trigger -->
+    <div class="p-3 border-t border-[#21262d] space-y-2">
+      <button onclick="openPermissionsModal()" class="w-full flex items-center justify-between px-3 py-2 text-xs text-[#848d97] hover:text-[#e6edf3] hover:bg-[#161b22] rounded-md transition">
+        <span class="flex items-center gap-2">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 0c-.69 0-1.843.265-2.928.56-1.11.3-2.229.655-2.887.87a1.54 1.54 0 0 0-1.044 1.262c-.596 4.477.787 7.795 2.465 9.99a11.777 11.777 0 0 0 2.517 2.453c.386.273.744.482 1.048.625.28.132.581.24.829.24s.548-.108.829-.24a7.159 7.159 0 0 0 1.048-.625 11.775 11.775 0 0 0 2.517-2.453c1.678-2.195 3.061-5.513 2.465-9.99a1.541 1.541 0 0 0-1.044-1.263 62.467 62.467 0 0 0-2.887-.87C9.843.266 8.69 0 8 0Zm2.146 5.146a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-1.5-1.5a.5.5 0 1 1 .708-.708L7.5 7.793l2.646-2.647Z"/>
+          </svg>
+          Trusted Recipients
+        </span>
+        <span id="trustedCountBadge" class="px-1.5 py-0.5 text-[10px] rounded-full bg-[#21262d] text-[#e6edf3]">0</span>
+      </button>
+
+      <div class="px-3 py-1.5 flex items-center gap-2 text-[11px] text-[#848d97]">
+        <span class="w-2 h-2 rounded-full bg-[#3fb950]"></span>
+        <span>Connected · Dhiraj Kumar</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Chat Workspace -->
+  <main class="flex-1 flex flex-col h-full bg-[#0d1117] relative min-w-0">
+
+    <!-- Top Navigation Bar -->
+    <header class="h-14 px-5 border-b border-[#30363d] bg-[#0d1117]/90 backdrop-blur flex items-center justify-between shrink-0">
+      <div class="flex items-center gap-3">
+        <button onclick="toggleSidebar()" class="p-1.5 rounded-md text-[#848d97] hover:text-[#e6edf3] hover:bg-[#161b22] transition" title="Toggle sidebar">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M1 2.75A.75.75 0 0 1 1.75 2h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 2.75Zm0 5A.75.75 0 0 1 1.75 7h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 7.75ZM1.75 12h12.5a.75.75 0 0 1 0 1.5H1.75a.75.75 0 0 1 0-1.5Z"/>
+          </svg>
+        </button>
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-semibold text-[#e6edf3]">d25 Chat</span>
+          <span class="text-xs text-[#848d97]">· Primary Inbox &amp; Mail Agent</span>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <span class="text-[11px] px-2.5 py-1 rounded-md bg-[#161b22] border border-[#30363d] text-[#848d97]">
+          Primary Inbox Only
+        </span>
+      </div>
+    </header>
+
+    <!-- Scrollable Chat Feed -->
+    <div id="chatContainer" class="flex-1 overflow-y-auto px-4 sm:px-8 py-6 select-text">
+      <div id="messagesWrapper" class="max-w-3xl mx-auto space-y-6">
+
+        <!-- Empty / Welcome State (GitHub Copilot centered hero) -->
+        <div id="welcomeHero" class="pt-10 pb-6 flex flex-col items-center text-center">
+          <div class="w-12 h-12 rounded-2xl bg-[#161b22] border border-[#30363d] flex items-center justify-center mb-4 shadow-sm">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#e6edf3" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a7 7 0 0 1 7 7v3a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-1.5a3.5 3.5 0 0 1-3.5 3.5h-4A3.5 3.5 0 0 1 6.5 18H5a2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2V9a7 7 0 0 1 7-7Z"/>
+              <circle cx="9.5" cy="12.5" r="1.2" fill="#e6edf3"/>
+              <circle cx="14.5" cy="12.5" r="1.2" fill="#e6edf3"/>
+            </svg>
+          </div>
+          <h1 class="text-xl font-semibold text-[#f0f6fc] mb-1.5">Ask d25 about your emails</h1>
+          <p class="text-sm text-[#848d97] max-w-md mb-8">
+            Summarize your Primary Inbox, search specific senders, or draft and send human-style emails with step-by-step approval.
+          </p>
+
+          <!-- Starter Prompt Grid -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl text-left">
+            <button onclick="usePrompt('Summarize today\'s emails from my Primary Inbox with important points')" class="p-3.5 rounded-lg bg-[#161b22] hover:bg-[#1c2128] border border-[#30363d] hover:border-[#484f58] transition group">
+              <div class="text-xs font-semibold text-[#e6edf3] group-hover:text-[#58a6ff] mb-1">Summarize today's inbox</div>
+              <div class="text-xs text-[#848d97]">Get key points and action items from Primary mail</div>
+            </button>
+
+            <button onclick="usePrompt('Summarize my last 5 emails')" class="p-3.5 rounded-lg bg-[#161b22] hover:bg-[#1c2128] border border-[#30363d] hover:border-[#484f58] transition group">
+              <div class="text-xs font-semibold text-[#e6edf3] group-hover:text-[#58a6ff] mb-1">Last 5 Primary emails</div>
+              <div class="text-xs text-[#848d97]">Quick digest of your 5 most recent conversations</div>
+            </button>
+
+            <button onclick="usePrompt('Send an email to gedhiraj@gmail.com saying I checked the email automation and it is working smoothly, waiting for your reply')" class="p-3.5 rounded-lg bg-[#161b22] hover:bg-[#1c2128] border border-[#30363d] hover:border-[#484f58] transition group">
+              <div class="text-xs font-semibold text-[#e6edf3] group-hover:text-[#58a6ff] mb-1">Draft &amp; send a status email</div>
+              <div class="text-xs text-[#848d97]">Compose a clean email with permission approval</div>
+            </button>
+
+            <button onclick="usePrompt('Check my unread emails in Primary Inbox')" class="p-3.5 rounded-lg bg-[#161b22] hover:bg-[#1c2128] border border-[#30363d] hover:border-[#484f58] transition group">
+              <div class="text-xs font-semibold text-[#e6edf3] group-hover:text-[#58a6ff] mb-1">Check unread mail</div>
+              <div class="text-xs text-[#848d97]">Scan unread messages without promotional clutter</div>
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Bottom Input Composer (GitHub Copilot style) -->
+    <div class="px-4 sm:px-8 pb-5 pt-2 bg-[#0d1117] shrink-0">
+      <div class="max-w-3xl mx-auto">
+        <div class="relative rounded-xl bg-[#161b22] border border-[#30363d] focus-within:border-[#2f81f7] focus-within:ring-1 focus-within:ring-[#2f81f7] transition shadow-lg">
+          <textarea
+            id="promptInput"
+            rows="1"
+            placeholder="Ask d25 to summarize emails, search a sender, or draft an email..."
+            class="w-full bg-transparent text-sm text-[#e6edf3] placeholder-[#848d97] px-4 pt-3.5 pb-11 resize-none focus:outline-none max-h-40 leading-relaxed"
+            onkeydown="handleKeyDown(event)"
+            oninput="autoResize(this)"
+          ></textarea>
+
+          <!-- Bottom Bar inside Composer -->
+          <div class="absolute bottom-2 left-3 right-3 flex items-center justify-between">
+            <div class="flex items-center gap-2 text-[11px] text-[#848d97]">
+              <span class="px-2 py-0.5 rounded bg-[#21262d] text-[#c9d1d9] font-medium">@gmail</span>
+              <span>Enter to send · Shift+Enter for new line</span>
+            </div>
+
+            <button
+              id="sendBtn"
+              onclick="sendMessage()"
+              class="p-1.5 rounded-lg bg-[#238636] hover:bg-[#2ea043] disabled:opacity-40 disabled:cursor-not-allowed text-white transition flex items-center justify-center"
+              title="Send message"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M.989 8 .064 2.68a1.342 1.342 0 0 1 1.85-1.462l13.402 5.744a1.13 1.13 0 0 1 0 2.076L1.913 14.782a1.343 1.343 0 0 1-1.85-1.463L.99 8Zm.603-5.288L2.38 7.25h4.87a.75.75 0 0 1 0 1.5H2.38l-.788 4.538L13.929 8Z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Trusted Recipients Modal -->
+  <div id="permissionsModal" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-[#161b22] border border-[#30363d] rounded-xl max-w-md w-full shadow-2xl overflow-hidden">
+      <div class="px-5 py-4 border-b border-[#30363d] flex items-center justify-between">
+        <div>
+          <h3 class="text-sm font-semibold text-[#f0f6fc]">Trusted Recipients (Allow Always)</h3>
+          <p class="text-xs text-[#848d97] mt-0.5">d25 can send or reply to these addresses without asking.</p>
+        </div>
+        <button onclick="closePermissionsModal()" class="text-[#848d97] hover:text-[#e6edf3] p-1">✕</button>
+      </div>
+      <div id="trustedListContainer" class="p-5 max-h-72 overflow-y-auto space-y-2">
+        <!-- Populated dynamically -->
+      </div>
+      <div class="px-5 py-3 bg-[#0d1117] border-t border-[#30363d] flex justify-end">
+        <button onclick="closePermissionsModal()" class="px-3.5 py-1.5 text-xs font-medium rounded-md bg-[#21262d] hover:bg-[#30363d] text-[#e6edf3] border border-[#30363d]">
+          Done
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = "http://127.0.0.1:8000";
+    let sessionId = null;
+    let isStreaming = false;
+
+    // Load trusted recipient count on startup
+    refreshTrustedCount();
+
+    function toggleSidebar() {
+      const sb = document.getElementById("sidebar");
+      sb.classList.toggle("hidden");
+    }
+
+    function autoResize(el) {
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 160) + "px";
+    }
+
+    function handleKeyDown(e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    }
+
+    function usePrompt(text) {
+      const input = document.getElementById("promptInput");
+      input.value = text;
+      autoResize(input);
+      sendMessage();
+    }
+
+    function startNewChat() {
+      if (isStreaming) return;
+      sessionId = null;
+      const wrapper = document.getElementById("messagesWrapper");
+      wrapper.innerHTML = "";
+      location.reload();
+    }
+
+    function scrollToBottom() {
+      const container = document.getElementById("chatContainer");
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    // Create User Message Bubble
+    function appendUserMessage(text) {
+      const hero = document.getElementById("welcomeHero");
+      if (hero) hero.remove();
+
+      const wrapper = document.getElementById("messagesWrapper");
+      const div = document.createElement("div");
+      div.className = "flex items-start gap-3.5";
+      div.innerHTML = `
+        <div class="w-7 h-7 rounded-full bg-[#1f6feb]/20 border border-[#1f6feb]/40 text-[#58a6ff] flex items-center justify-center text-xs font-semibold shrink-0 mt-0.5">
+          DK
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="text-xs font-semibold text-[#f0f6fc] mb-1">You</div>
+          <div class="text-sm text-[#e6edf3] leading-relaxed whitespace-pre-wrap">${escapeHtml(text)}</div>
+        </div>
+      `;
+      wrapper.appendChild(div);
+      scrollToBottom();
+    }
+
+    // Create Assistant Turn Container (Steps + Approval Card + Final Markdown Reply)
+    function createAssistantTurn() {
+      const wrapper = document.getElementById("messagesWrapper");
+      const turn = document.createElement("div");
+      turn.className = "flex items-start gap-3.5";
+      turn.innerHTML = `
+        <div class="w-7 h-7 rounded-full bg-[#161b22] border border-[#30363d] text-[#e6edf3] flex items-center justify-center shrink-0 mt-0.5">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a7 7 0 0 1 7 7v3a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-1.5a3.5 3.5 0 0 1-3.5 3.5h-4A3.5 3.5 0 0 1 6.5 18H5a2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2V9a7 7 0 0 1 7-7Z"/>
+            <circle cx="9.5" cy="12.5" r="1" fill="currentColor"/>
+            <circle cx="14.5" cy="12.5" r="1" fill="currentColor"/>
+          </svg>
+        </div>
+        <div class="flex-1 min-w-0 space-y-3">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-semibold text-[#f0f6fc]">d25</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-[#21262d] text-[#848d97] border border-[#30363d]">Agent</span>
+          </div>
+
+          <!-- Copilot Collapsible Execution Steps Box -->
+          <div class="steps-box rounded-lg bg-[#161b22] border border-[#30363d] overflow-hidden">
+            <button type="button" onclick="this.nextElementSibling.classList.toggle('hidden')" class="w-full px-3.5 py-2 flex items-center justify-between text-xs text-[#848d97] hover:text-[#e6edf3] bg-[#161b22] border-b border-[#21262d]">
+              <span class="steps-summary font-medium flex items-center gap-2">Working on your request...</span>
+              <span class="text-[10px]">Toggle steps</span>
+            </button>
+            <div class="steps-list p-3 space-y-2 text-xs"></div>
+          </div>
+
+          <!-- Dynamic Approval Cards Slot -->
+          <div class="approvals-slot space-y-3"></div>
+
+          <!-- Final Response Markdown Slot -->
+          <div class="reply-slot markdown-body text-[#e6edf3] hidden"></div>
+        </div>
+      `;
+      wrapper.appendChild(turn);
+      scrollToBottom();
+      return turn;
+    }
+
+    function upsertStep(turnEl, step) {
+      const list = turnEl.querySelector(".steps-list");
+      const summary = turnEl.querySelector(".steps-summary");
+      let row = list.querySelector(`[data-step-id="${step.id}"]`);
+
+      let iconHtml = "";
+      if (step.status === "running") {
+        iconHtml = `<span class="w-3.5 h-3.5 rounded-full border-2 border-[#2f81f7] border-t-transparent animate-spin-fast inline-block shrink-0"></span>`;
+      } else if (step.status === "completed") {
+        iconHtml = `<svg width="14" height="14" viewBox="0 0 16 16" fill="#3fb950" class="shrink-0"><path d="M8 16A8 8 0 1 1 8 0a8 8 0 0 1 0 16Zm3.78-9.72a.751.751 0 0 0-.018-1.042.751.751 0 0 0-1.042-.018L6.75 9.19 5.28 7.72a.751.751 0 0 0-1.042.018.751.751 0 0 0-.018 1.042l2 2a.75.75 0 0 0 1.06 0Z"/></svg>`;
+      } else {
+        iconHtml = `<svg width="14" height="14" viewBox="0 0 16 16" fill="#d29922" class="shrink-0"><path d="M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575ZM8 5a.75.75 0 0 0-.75.75v2.5a.75.75 0 0 0 1.5 0v-2.5A.75.75 0 0 0 8 5Zm1 6a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg>`;
+      }
+
+      const contentHtml = `
+        <div class="flex items-start gap-2.5">
+          <div class="mt-0.5">${iconHtml}</div>
+          <div class="min-w-0 flex-1">
+            <div class="text-[#e6edf3] font-medium">${escapeHtml(step.label)}</div>
+            ${step.detail ? `<div class="text-[11px] text-[#848d97] truncate mt-0.5">${escapeHtml(step.detail)}</div>` : ""}
+          </div>
+        </div>
+      `;
+
+      if (!row) {
+        row = document.createElement("div");
+        row.setAttribute("data-step-id", step.id);
+        list.appendChild(row);
+      }
+      row.innerHTML = contentHtml;
+
+      const totalSteps = list.children.length;
+      if (step.label === "Done") {
+        summary.innerHTML = `<svg width="13" height="13" viewBox="0 0 16 16" fill="#3fb950"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg> Completed ${totalSteps} step(s)`;
+      } else {
+        summary.textContent = step.label;
+      }
+      scrollToBottom();
+    }
+
+    function renderApprovalCard(turnEl, data) {
+      const slot = turnEl.querySelector(".approvals-slot");
+      const card = document.createElement("div");
+      card.id = `approval-${data.approval_id}`;
+      card.className = "rounded-xl bg-[#161b22] border border-[#d29922]/60 overflow-hidden shadow-md";
+
+      const isEmailAction = data.action_type === "send_email" || data.action_type === "reply_to_email";
+      const titleText =
+        data.action_type === "send_email"
+          ? "Permission required to send email"
+          : data.action_type === "reply_to_email"
+          ? "Permission required to reply to thread"
+          : `Permission required to ${data.preview.action} ${data.preview.count} email(s)`;
+
+      let bodyPreviewHtml = "";
+      if (isEmailAction) {
+        bodyPreviewHtml = `
+          <div class="p-4 space-y-2.5 text-xs">
+            <div class="flex gap-2">
+              <span class="text-[#848d97] w-14 shrink-0">To:</span>
+              <span class="text-[#f0f6fc] font-medium">${escapeHtml(data.preview.to)}</span>
+            </div>
+            <div class="flex gap-2">
+              <span class="text-[#848d97] w-14 shrink-0">Subject:</span>
+              <span class="text-[#f0f6fc] font-medium">${escapeHtml(data.preview.subject)}</span>
+            </div>
+            <div class="pt-2 border-t border-[#30363d]">
+              <div class="bg-[#0d1117] border border-[#30363d] rounded-lg p-3.5 text-[#e6edf3] text-xs leading-relaxed whitespace-pre-wrap">${escapeHtml(data.preview.body)}\n\n<strong class="text-[#f0f6fc]">${escapeHtml(data.preview.signature)}</strong></div>
+            </div>
+          </div>
+        `;
+      } else {
+        bodyPreviewHtml = `
+          <div class="p-4 text-xs text-[#e6edf3]">
+            Action: <strong class="text-[#f0f6fc]">${escapeHtml(data.preview.action)}</strong> on <strong>${data.preview.count}</strong> selected email(s).
+          </div>
+        `;
+      }
+
+      const allowAlwaysBtn = data.recipient
+        ? `<button onclick="submitApproval('${data.approval_id}', 'allow_always')" class="px-3 py-1.5 text-xs font-medium rounded-md bg-[#1f6feb] hover:bg-[#388bfd] text-white transition">
+             Allow Always for ${escapeHtml(data.recipient)}
+           </button>`
+        : "";
+
+      card.innerHTML = `
+        <div class="px-4 py-2.5 bg-[#d29922]/10 border-b border-[#30363d] flex items-center justify-between">
+          <div class="flex items-center gap-2 text-xs font-semibold text-[#e3b341]">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 0c-.69 0-1.843.265-2.928.56-1.11.3-2.229.655-2.887.87a1.54 1.54 0 0 0-1.044 1.262c-.596 4.477.787 7.795 2.465 9.99a11.777 11.777 0 0 0 2.517 2.453c.386.273.744.482 1.048.625.28.132.581.24.829.24s.548-.108.829-.24a7.159 7.159 0 0 0 1.048-.625 11.775 11.775 0 0 0 2.517-2.453c1.678-2.195 3.061-5.513 2.465-9.99a1.541 1.541 0 0 0-1.044-1.263 62.467 62.467 0 0 0-2.887-.87C9.843.266 8.69 0 8 0Z"/>
+            </svg>
+            <span>${titleText}</span>
+          </div>
+          <span class="text-[11px] text-[#848d97]">Waiting for approval</span>
+        </div>
+        ${bodyPreviewHtml}
+        <div class="approval-actions px-4 py-3 bg-[#0d1117] border-t border-[#30363d] flex flex-wrap items-center gap-2">
+          <button onclick="submitApproval('${data.approval_id}', 'allow_once')" class="px-3 py-1.5 text-xs font-medium rounded-md bg-[#238636] hover:bg-[#2ea043] text-white transition">
+            Allow Once
+          </button>
+          ${allowAlwaysBtn}
+          <button onclick="submitApproval('${data.approval_id}', 'deny')" class="px-3 py-1.5 text-xs font-medium rounded-md bg-[#21262d] hover:bg-[#da3633] text-[#e6edf3] hover:text-white border border-[#30363d] transition ml-auto">
+            Deny
+          </button>
+        </div>
+      `;
+
+      slot.appendChild(card);
+      scrollToBottom();
+    }
+
+    async function submitApproval(approvalId, decision) {
+      const card = document.getElementById(`approval-${approvalId}`);
+      if (card) {
+        const actions = card.querySelector(".approval-actions");
+        const label =
+          decision === "allow_once"
+            ? "Approved (Once)"
+            : decision === "allow_always"
+            ? "Approved (Always remembered)"
+            : "Denied";
+        actions.innerHTML = `<span class="text-xs font-medium text-[#848d97]">Decision recorded: <strong class="text-[#e6edf3]">${label}</strong></span>`;
+        card.classList.remove("border-[#d29922]/60");
+        card.classList.add("border-[#30363d]");
+      }
+
+      await fetch(`${API_BASE}/api/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approval_id: approvalId, decision }),
+      });
+
+      if (decision === "allow_always") {
+        refreshTrustedCount();
+      }
+    }
+
+    async function sendMessage() {
+      if (isStreaming) return;
+      const input = document.getElementById("promptInput");
+      const text = input.value.trim();
+      if (!text) return;
+
+      input.value = "";
+      autoResize(input);
+      isStreaming = true;
+      document.getElementById("sendBtn").disabled = true;
+
+      appendUserMessage(text);
+      const turnEl = createAssistantTurn();
+
+      try {
+        const response = await fetch(`${API_BASE}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sessionId, message: text }),
+        });
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const events = buffer.split("\n\n");
+          buffer = events.pop();
+
+          for (const rawEvent of events) {
+            if (!rawEvent.startsWith("data: ")) continue;
+            const payload = JSON.parse(rawEvent.slice(6));
+
+            if (payload.type === "session") {
+              sessionId = payload.session_id;
+            } else if (payload.type === "step") {
+              upsertStep(turnEl, payload);
+            } else if (payload.type === "approval_required") {
+              renderApprovalCard(turnEl, payload);
+            } else if (payload.type === "message") {
+              const replySlot = turnEl.querySelector(".reply-slot");
+              replySlot.classList.remove("hidden");
+              replySlot.innerHTML = marked.parse(payload.text || "");
+              scrollToBottom();
+            } else if (payload.type === "error") {
+              const replySlot = turnEl.querySelector(".reply-slot");
+              replySlot.classList.remove("hidden");
+              replySlot.innerHTML = `<div class="p-3 rounded-lg bg-[#da3633]/10 border border-[#f85149]/40 text-xs text-[#ff7b72]">${escapeHtml(payload.message)}</div>`;
+              scrollToBottom();
+            }
+          }
+        }
+      } catch (err) {
+        const replySlot = turnEl.querySelector(".reply-slot");
+        replySlot.classList.remove("hidden");
+        replySlot.innerHTML = `<div class="p-3 rounded-lg bg-[#da3633]/10 border border-[#f85149]/40 text-xs text-[#ff7b72]">Connection error: ${escapeHtml(err.message)}</div>`;
+      } finally {
+        isStreaming = false;
+        document.getElementById("sendBtn").disabled = false;
+        input.focus();
+      }
+    }
+
+    // Trusted Recipients Modal Helpers
+    async function refreshTrustedCount() {
+      try {
+        const res = await fetch(`${API_BASE}/api/permissions`);
+        const data = await res.json();
+        document.getElementById("trustedCountBadge").textContent = (data.allowed_recipients || []).length;
+      } catch (_) {}
+    }
+
+    async function openPermissionsModal() {
+      const modal = document.getElementById("permissionsModal");
+      const container = document.getElementById("trustedListContainer");
+      modal.classList.remove("hidden");
+      container.innerHTML = `<div class="text-xs text-[#848d97]">Loading...</div>`;
+
+      const res = await fetch(`${API_BASE}/api/permissions`);
+      const data = await res.json();
+      const list = data.allowed_recipients || [];
+
+      if (!list.length) {
+        container.innerHTML = `<div class="text-xs text-[#848d97] py-4 text-center">No trusted recipients saved yet. Click "Allow Always" on any email prompt to add one.</div>`;
+        return;
+      }
+
+      container.innerHTML = list
+        .map(
+          (email) => `
+          <div class="flex items-center justify-between px-3 py-2 rounded-lg bg-[#0d1117] border border-[#30363d]">
+            <span class="text-xs text-[#e6edf3] font-medium">${escapeHtml(email)}</span>
+            <button onclick="revokeRecipient('${escapeHtml(email)}')" class="text-xs text-[#f85149] hover:underline">Revoke</button>
+          </div>
+        `
+        )
+        .join("");
+    }
+
+    function closePermissionsModal() {
+      document.getElementById("permissionsModal").classList.add("hidden");
+    }
+
+    async function revokeRecipient(email) {
+      await fetch(`${API_BASE}/api/permissions/${encodeURIComponent(email)}`, { method: "DELETE" });
+      await openPermissionsModal();
+      await refreshTrustedCount();
+    }
+  </script>
+</body>
+</html>
