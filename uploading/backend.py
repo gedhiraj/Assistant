@@ -16,6 +16,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 
 from google import genai
 from google.genai import types
@@ -51,6 +53,9 @@ FALLBACK_MODELS = [
 ]
 
 app = FastAPI(title="D25 Assistant Backend")
+
+BASE_DIR = Path(__file__).resolve().parent
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 app.add_middleware(
     CORSMiddleware,
@@ -148,13 +153,36 @@ class ApprovalDecision(BaseModel):
 # ---------------------------------------------------------------------------
 # Human-Style Editorial HTML Template
 # ---------------------------------------------------------------------------
+
+def _clean_markdown_to_html(text: str) -> str:
+    """Converts basic markdown bold/bullets into clean editorial HTML so raw ** or - never leak into emails."""
+    escaped = html.escape(text)
+    # Convert **bold** to <strong>bold</strong>
+    escaped = re.sub(r"\*\*(.+?)\*\*", r'<strong style="color: #111827; font-weight: 600;">\1</strong>', escaped)
+    return escaped
+
 def build_html_email(clean_body: str) -> str:
-    paragraphs = [p.strip() for p in clean_body.split("\n\n") if p.strip()]
-    html_paragraphs = "".join(
-        f'<p style="margin: 0 0 16px 0; line-height: 1.65; color: #1f2328; font-size: 15px;">'
-        f'{html.escape(p).replace(chr(10), "<br>")}</p>'
-        for p in paragraphs
-    )
+    """Clean, native-looking editorial HTML that reads like a genuine 1-to-1 human email."""
+    blocks = [b.strip() for b in clean_body.split("\n\n") if b.strip()]
+    html_blocks = []
+
+    for block in blocks:
+        lines = [line.strip() for line in block.split("\n") if line.strip()]
+        # Check if this block is a bullet list
+        if all(line.startswith(("- ", "* ")) for line in lines):
+            items_html = "".join(
+                f'<li style="margin: 0 0 8px 0; line-height: 1.6; color: #1f2328; font-size: 15px;">'
+                f'{_clean_markdown_to_html(line[2:].strip())}</li>'
+                for line in lines
+            )
+            html_blocks.append(f'<ul style="margin: 0 0 16px 0; padding-left: 20px;">{items_html}</ul>')
+        else:
+            formatted = "<br>".join(_clean_markdown_to_html(line) for line in lines)
+            html_blocks.append(
+                f'<p style="margin: 0 0 16px 0; line-height: 1.65; color: #1f2328; font-size: 15px;">{formatted}</p>'
+            )
+
+    body_html = "".join(html_blocks)
 
     return f"""<!DOCTYPE html>
 <html>
@@ -169,7 +197,7 @@ def build_html_email(clean_body: str) -> str:
         <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 580px;">
           <tr>
             <td>
-              {html_paragraphs}
+              {body_html}
               <p style="margin: 28px 0 0 0; font-size: 15px; font-weight: 600; color: #111827;">Dhiraj Kumar</p>
             </td>
           </tr>
@@ -498,8 +526,14 @@ def run_agent_turn(
       * For "today's emails", pass `query="category:primary after:{today_str}"`.
       * For "last 5 emails", pass `query="category:primary"` and `max_results=5`.
       * ONLY when the user specifies a particular sender or topic (e.g., "emails from Rahul"), search specifically for that sender (`query="from:rahul"`, `include_all_categories=True`).
-    - When summarizing emails, present crisp, scannable bullet points with sender, core topic, and action items.
-    - When sending (`send_email`) or replying (`reply_to_email`), write like a natural, polite human—no AI clichés ("I hope this email finds you well", "pleased to confirm", etc.), use natural contractions, stick strictly to the user's points unless asked to explain, and NEVER add "Dhiraj Kumar" at the end of `body` (the HTML template adds it automatically).
+    - When summarizing emails inside the chat, present crisp, scannable bullet points with sender, core topic, and action items.
+
+    EMAIL WRITING STYLE (WHEN SENDING OR REPLYING):
+    - When calling `send_email` or `reply_to_email`, write in **natural, flowing human paragraphs**—NOT structured AI templates or bullet lists with "**Objective:**", "**Key Focus Areas:**", or "**Action Items:**".
+    - NEVER use Markdown syntax (`**`, `##`, `- `) inside email bodies unless the user explicitly asks for a bulleted list.
+    - Keep emails polite, conversational, and concise—stick strictly to the user's points without adding filler unless asked to explain.
+    - Use natural contractions (e.g., "I'm", "we'll", "it's") and a natural sentence-case subject line.
+    - NEVER use AI clichés ("I hope this email finds you well", "pleased to confirm", "at your earliest convenience") and NEVER add "Dhiraj Kumar" at the end of `body` (the HTML template adds it automatically).
     """
 
     thinking_step_id = str(uuid.uuid4())
