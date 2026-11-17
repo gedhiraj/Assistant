@@ -6,8 +6,10 @@ import uuid
 import base64
 import asyncio
 import datetime
+import re
 from typing import Optional
 from email.message import EmailMessage
+
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
