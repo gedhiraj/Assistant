@@ -62,7 +62,7 @@ DRIVE_SERVICE = build("drive", "v3", credentials=CREDS)
 TASKS_SERVICE = build("tasks", "v1", credentials=CREDS)
 
 
-def build_html_email(subject: str, clean_body: str) -> str:
+def build_html_email(clean_body: str) -> str:
     """Clean, native-looking editorial HTML that reads like a genuine 1-to-1 human email."""
     paragraphs = [p.strip() for p in clean_body.split("\n\n") if p.strip()]
     html_paragraphs = "".join(
@@ -96,8 +96,59 @@ def build_html_email(subject: str, clean_body: str) -> str:
 </html>"""
 
 
+def _extract_email_body(payload: dict) -> str:
+    """Extracts plain-text body content from a Gmail message payload."""
+    if "parts" in payload:
+        for part in payload["parts"]:
+            if part.get("mimeType") == "text/plain" and "data" in part.get("body", {}):
+                return base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="replace")
+            if "parts" in part:
+                nested = _extract_email_body(part)
+                if nested:
+                    return nested
+    elif "data" in payload.get("body", {}):
+        return base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8", errors="replace")
+    return ""
+
+
+def get_emails(query: str = "", max_results: int = 5) -> list[dict]:
+    """Fetches and reads emails from Gmail using optional Gmail search queries.
+
+    Args:
+        query: Gmail search filter (e.g., 'newer_than:1d' for today's mail, 'is:unread', 'from:gedhiraj@gmail.com', or '' for latest emails).
+        max_results: Number of emails to retrieve (default 5, max 15).
+    """
+    max_results = min(max(1, max_results), 15)
+    response = GMAIL_SERVICE.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
+    messages = response.get("messages", [])
+
+    if not messages:
+        return [{"info": f"No emails found matching query: '{query}'"}]
+
+    results = []
+    for m in messages:
+        detail = GMAIL_SERVICE.users().messages().get(userId="me", id=m["id"], format="full").execute()
+        headers = detail.get("payload", {}).get("headers", [])
+        subject = next((h["value"] for h in headers if h["name"] == "Subject"), "(No Subject)")
+        sender = next((h["value"] for h in headers if h["name"] == "From"), "Unknown")
+        date = next((h["value"] for h in headers if h["name"] == "Date"), "")
+        message_id_header = next((h["value"] for h in headers if h["name"] == "Message-ID"), "")
+        body_text = _extract_email_body(detail.get("payload", {})) or detail.get("snippet", "")
+
+        results.append({
+            "id": m["id"],
+            "threadId": detail.get("threadId"),
+            "message_id_header": message_id_header,
+            "from": sender,
+            "date": date,
+            "subject": subject,
+            "body": body_text[:2500],  # Trim overly long newsletters
+        })
+    return results
+
+
 def send_email(to_email: str, subject: str, body: str) -> str:
-    """Drafts and sends a clean HTML + plain-text email via Gmail.
+    """Drafts and sends a new clean HTML + plain-text email via Gmail.
 
     Args:
         to_email: The recipient's email address.
@@ -108,7 +159,7 @@ def send_email(to_email: str, subject: str, body: str) -> str:
     clean_subject = subject.strip()
 
     print("\n" + "=" * 55, flush=True)
-    print("EMAIL DRAFT PREVIEW (Human-Style Editorial HTML)", flush=True)
+    print("EMAIL DRAFT PREVIEW", flush=True)
     print("=" * 55, flush=True)
     print(f"To:      {to_email}", flush=True)
     print(f"Subject: {clean_subject}", flush=True)
@@ -124,13 +175,8 @@ def send_email(to_email: str, subject: str, body: str) -> str:
     message = EmailMessage()
     message["To"] = to_email
     message["Subject"] = clean_subject
-
-    # Plain-text fallback + Styled HTML version
-    plain_full = f"{clean_body}\n\nDhiraj Kumar"
-    html_full = build_html_email(clean_subject, clean_body)
-
-    message.set_content(plain_full)
-    message.add_alternative(html_full, subtype="html")
+    message.set_content(f"{clean_body}\n\nDhiraj Kumar")
+    message.add_alternative(build_html_email(clean_body), subtype="html")
 
     encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
     GMAIL_SERVICE.users().messages().send(userId="me", body={"raw": encoded_message}).execute()
@@ -139,29 +185,69 @@ def send_email(to_email: str, subject: str, body: str) -> str:
     return f"Email successfully sent to {to_email} with subject '{clean_subject}'."
 
 
-def fetch_workspace_context() -> dict:
-    msg_list = GMAIL_SERVICE.users().messages().list(userId="me", maxResults=5).execute().get("messages", [])
-    emails = []
-    for m in msg_list:
-        detail = GMAIL_SERVICE.users().messages().get(userId="me", id=m["id"], format="metadata").execute()
-        headers = detail.get("payload", {}).get("headers", [])
-        subject = next((h["value"] for h in headers if h["name"] == "Subject"), "(No Subject)")
-        sender = next((h["value"] for h in headers if h["name"] == "From"), "Unknown")
-        emails.append(f"From: {sender} | Subject: {subject}")
+def reply_to_email(message_id: str, body: str) -> str:
+    """Replies directly inside an existing Gmail thread after user approval.
 
-    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    events_raw = (
-        CALENDAR_SERVICE.events()
-        .list(calendarId="primary", timeMin=now_iso, maxResults=5, singleEvents=True, orderBy="startTime")
-        .execute()
-        .get("items", [])
-    )
-    events = [f"{e['start'].get('dateTime', e['start'].get('date'))} -> {e.get('summary', 'Untitled')}" for e in events_raw]
+    Args:
+        message_id: The Gmail message 'id' returned by `get_emails` that you are replying to.
+        body: Concise, polite reply text (do NOT include sign-off).
+    """
+    orig = GMAIL_SERVICE.users().messages().get(userId="me", id=message_id, format="metadata").execute()
+    headers = orig.get("payload", {}).get("headers", [])
+    orig_from = next((h["value"] for h in headers if h["name"] == "From"), "")
+    orig_subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
+    orig_msg_id = next((h["value"] for h in headers if h["name"] == "Message-ID"), "")
+    thread_id = orig.get("threadId")
 
-    tasks_raw = TASKS_SERVICE.tasks().list(tasklist="@default", showCompleted=False, maxResults=10).execute().get("items", [])
-    todo_items = [t.get("title", "Untitled Task") for t in tasks_raw]
+    reply_subject = orig_subject if orig_subject.lower().startswith("re:") else f"Re: {orig_subject}"
+    clean_body = body.replace("\\n", "\n").strip()
 
-    return {"emails": emails, "events": events, "tasks": todo_items}
+    print("\n" + "=" * 55, flush=True)
+    print("REPLY DRAFT PREVIEW", flush=True)
+    print("=" * 55, flush=True)
+    print(f"To:      {orig_from}", flush=True)
+    print(f"Subject: {reply_subject}", flush=True)
+    print("-" * 55, flush=True)
+    print(clean_body, flush=True)
+    print("\nDhiraj Kumar", flush=True)
+    print("=" * 55, flush=True)
+
+    confirm = input("Approve and send this reply? (y/n): ").strip().lower()
+    if confirm != "y":
+        return "Reply cancelled by user."
+
+    message = EmailMessage()
+    message["To"] = orig_from
+    message["Subject"] = reply_subject
+    if orig_msg_id:
+        message["In-Reply-To"] = orig_msg_id
+        message["References"] = orig_msg_id
+
+    message.set_content(f"{clean_body}\n\nDhiraj Kumar")
+    message.add_alternative(build_html_email(clean_body), subtype="html")
+
+    encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+    GMAIL_SERVICE.users().messages().send(
+        userId="me", body={"raw": encoded_message, "threadId": thread_id}
+    ).execute()
+
+    print("-> Reply sent in thread!", flush=True)
+    return f"Reply sent to {orig_from} on thread '{reply_subject}'."
+
+
+def mark_emails_read(message_ids: list[str]) -> str:
+    """Marks one or more Gmail messages as read.
+
+    Args:
+        message_ids: List of Gmail message IDs to mark as read.
+    """
+    if not message_ids:
+        return "No message IDs provided."
+    GMAIL_SERVICE.users().messages().batchModify(
+        userId="me",
+        body={"ids": message_ids, "removeLabelIds": ["UNREAD"]},
+    ).execute()
+    return f"Marked {len(message_ids)} email(s) as read."
 
 
 def send_with_fallback(ai_client: genai.Client, system_prompt: str, history: list, user_input: str):
@@ -173,7 +259,7 @@ def send_with_fallback(ai_client: genai.Client, system_prompt: str, history: lis
                 history=history,
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
-                    tools=[send_email],
+                    tools=[get_emails, send_email, reply_to_email, mark_emails_read],
                 ),
             )
             reply = chat.send_message(user_input)
@@ -189,30 +275,23 @@ def send_with_fallback(ai_client: genai.Client, system_prompt: str, history: lis
 
 
 def main():
-    print("Fetching your latest Workspace data...", flush=True)
-    context = fetch_workspace_context()
-
     ai_client = genai.Client(api_key=GEMINI_API_KEY)
+    today_str = datetime.date.today().strftime("%Y/%m/%d")
 
     system_prompt = f"""
-    You are D25, the personal AI assistant for Dhiraj Kumar.
+    You are D25, the personal AI assistant for Dhiraj Kumar. Today's date is {today_str}.
 
-    HUMAN-LIKE EMAIL WRITING RULES:
-    Whenever the user asks to send an email, call `send_email` directly.
-    1. Sound completely human, natural, and polite—never robotic or overly formal.
-    2. NEVER use AI clichés such as "I hope this email finds you well", "I am writing to inform you", "pleased to confirm", or "at your earliest convenience".
-    3. Use natural contractions (e.g., "I'm", "it's", "let's") and keep the message concise—stick strictly to the user's exact points without inventing extra details unless asked to explain.
-    4. Write a natural, sentence-case subject line (e.g., "Quick check on email automation").
-    5. Do NOT add a sign-off ("Best regards, Dhiraj Kumar") at the end of `body`—the HTML template adds Dhiraj's signature automatically.
-
-    Live Google Workspace snapshot:
-    - Recent Emails: {context['emails']}
-    - Upcoming Calendar Events: {context['events']}
-    - Pending Tasks: {context['tasks']}
+    GMAIL CAPABILITIES & RULES:
+    - Use `get_emails` whenever the user asks to read, search, or summarize emails.
+      * For "today's emails", pass `query="after:{today_str}"` (or `query="newer_than:1d"`).
+      * For "last 5 emails", pass `query=""` and `max_results=5`.
+      * For unread emails, pass `query="is:unread"`.
+    - When summarizing emails, highlight the sender, core topic, and any deadlines or action items in crisp bullet points.
+    - When sending (`send_email`) or replying (`reply_to_email`), write like a natural, polite human—no AI clichés ("I hope this email finds you well", "pleased to confirm", etc.), use natural contractions, keep it concise to the user's exact points, and NEVER add "Dhiraj Kumar" at the end of `body` (the HTML template adds it automatically).
     """
 
     history = []
-    print("\nD25 is ready! Type 'exit' to quit.", flush=True)
+    print("D25 Gmail Assistant is ready! Type 'exit' to quit.", flush=True)
     while True:
         user_input = input("\nYou: ").strip()
         if user_input.lower() in {"exit", "quit"}:
