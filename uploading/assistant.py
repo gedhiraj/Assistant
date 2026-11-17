@@ -111,19 +111,26 @@ def _extract_email_body(payload: dict) -> str:
     return ""
 
 
-def get_emails(query: str = "", max_results: int = 5) -> list[dict]:
-    """Fetches and reads emails from Gmail using optional Gmail search queries.
+def get_emails(query: str = "", max_results: int = 5, include_all_categories: bool = False) -> list[dict]:
+    """Fetches and reads emails from Gmail, defaulting strictly to the Primary Inbox.
 
     Args:
-        query: Gmail search filter (e.g., 'newer_than:1d' for today's mail, 'is:unread', 'from:gedhiraj@gmail.com', or '' for latest emails).
+        query: Gmail search filter (e.g., 'after:2026/11/17', 'is:unread', 'from:gedhiraj@gmail.com', or '' for latest Primary Inbox emails).
         max_results: Number of emails to retrieve (default 5, max 15).
+        include_all_categories: Set to True ONLY when the user explicitly asks to search for a specific sender or includes promotional/all mail.
     """
     max_results = min(max(1, max_results), 15)
-    response = GMAIL_SERVICE.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
+    clean_query = query.strip()
+
+    # Enforce Primary Inbox only unless the user explicitly specified a sender or requested all categories
+    if not include_all_categories and "from:" not in clean_query.lower() and "category:" not in clean_query.lower():
+        clean_query = f"category:primary {clean_query}".strip()
+
+    response = GMAIL_SERVICE.users().messages().list(userId="me", q=clean_query, maxResults=max_results).execute()
     messages = response.get("messages", [])
 
     if not messages:
-        return [{"info": f"No emails found matching query: '{query}'"}]
+        return [{"info": f"No Primary Inbox emails found matching query: '{clean_query}'"}]
 
     results = []
     for m in messages:
@@ -142,10 +149,9 @@ def get_emails(query: str = "", max_results: int = 5) -> list[dict]:
             "from": sender,
             "date": date,
             "subject": subject,
-            "body": body_text[:2500],  # Trim overly long newsletters
+            "body": body_text[:2500],
         })
     return results
-
 
 def send_email(to_email: str, subject: str, body: str) -> str:
     """Drafts and sends a new clean HTML + plain-text email via Gmail.
@@ -283,9 +289,12 @@ def main():
 
     GMAIL CAPABILITIES & RULES:
     - Use `get_emails` whenever the user asks to read, search, or summarize emails.
-      * For "today's emails", pass `query="after:{today_str}"` (or `query="newer_than:1d"`).
-      * For "last 5 emails", pass `query=""` and `max_results=5`.
-      * For unread emails, pass `query="is:unread"`.
+    - STRICT INBOX FILTERING:
+      * By default, ONLY fetch and summarize emails from the **Primary Inbox** (`category:primary`)—NEVER include Promotional, Social, Forums, or automated marketing emails unless the user explicitly asks for them.
+      * For "today's emails", pass `query="category:primary after:{today_str}"`.
+      * For "last 5 emails", pass `query="category:primary"` and `max_results=5`.
+      * For unread emails, pass `query="category:primary is:unread"`.
+      * ONLY when the user specifies a particular sender or keyword (e.g., "emails from Rahul" or "emails about interview"), search specifically for that sender/topic (`query="from:rahul"`, `include_all_categories=True`) and summarize only matching emails from that sender.
     - When summarizing emails, highlight the sender, core topic, and any deadlines or action items in crisp bullet points.
     - When sending (`send_email`) or replying (`reply_to_email`), write like a natural, polite human—no AI clichés ("I hope this email finds you well", "pleased to confirm", etc.), use natural contractions, keep it concise to the user's exact points, and NEVER add "Dhiraj Kumar" at the end of `body` (the HTML template adds it automatically).
     """
