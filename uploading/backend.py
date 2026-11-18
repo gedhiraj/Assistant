@@ -10,6 +10,7 @@ import datetime
 import certifi
 from typing import Optional
 from email.message import EmailMessage
+from email.utils import formataddr, formatdate, make_msgid, parseaddr
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -205,9 +206,17 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class ApprovalEdits(BaseModel):
+    to: Optional[str] = None
+    subject: Optional[str] = None
+    body: Optional[str] = None
+    signature: Optional[str] = None
+
+
 class ApprovalDecision(BaseModel):
     approval_id: str
     decision: str  # "allow_once" | "allow_always" | "deny"
+    edits: Optional[ApprovalEdits] = None
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +248,11 @@ def build_html_email(clean_body: str, sender_name: str = "Dhiraj Kumar") -> str:
             )
 
     body_html = "".join(html_blocks)
+    signature_html = (
+        f'<p style="margin: 28px 0 0 0; font-size: 15px; font-weight: 600; color: #111827;">{html.escape(sender_name)}</p>'
+        if sender_name
+        else ""
+    )
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -253,7 +267,7 @@ def build_html_email(clean_body: str, sender_name: str = "Dhiraj Kumar") -> str:
           <tr>
             <td>
               {body_html}
-              <p style="margin: 28px 0 0 0; font-size: 15px; font-weight: 600; color: #111827;">{html.escape(sender_name)}</p>
+              {signature_html}
             </td>
           </tr>
         </table>
@@ -262,6 +276,12 @@ def build_html_email(clean_body: str, sender_name: str = "Dhiraj Kumar") -> str:
   </table>
 </body>
 </html>"""
+
+
+def _set_sender_headers(message: EmailMessage, sender_name: str, sender_email: str) -> None:
+    message["From"] = formataddr((sender_name, sender_email))
+    message["Date"] = formatdate(localtime=True)
+    message["Message-ID"] = make_msgid(domain=sender_email.rsplit("@", 1)[1])
 
 
 def _extract_email_body(payload: dict) -> str:
@@ -321,6 +341,8 @@ def request_user_approval_sync(
         "event": decision_event,
         "decision": "deny",
         "recipient": clean_recip,
+        "action_type": action_type,
+        "preview": preview_data,
     }
 
     loop.call_soon_threadsafe(
@@ -341,6 +363,7 @@ def request_user_approval_sync(
 
     record = PENDING_APPROVALS.pop(approval_id, {})
     decision = record.get("decision", "deny")
+    clean_recip = record.get("recipient", clean_recip)
 
     if decision == "allow_always" and clean_recip:
         trust_recipient_always(clean_recip, user_email)
@@ -441,9 +464,16 @@ def run_agent_turn(
     start_ts = time.time()
     turn_record = {"steps": [], "approvals": []}
     display_name = user_email.split("@")[0].replace(".", " ").title()
+    step_start_labels: dict[str, str] = {}
 
     def emit_step(step_id: str, status: str, label: str, detail: str = ""):
+        step_start_labels.setdefault(step_id, label)
         step_obj = {"id": step_id, "status": status, "label": label, "detail": detail}
+        if status == "completed" and label != step_start_labels[step_id]:
+            outcome = label
+            step_obj["label"] = step_start_labels[step_id]
+            step_obj["detail"] = f"{outcome} - {detail}" if detail else outcome
+
         for idx, existing in enumerate(turn_record["steps"]):
             if existing["id"] == step_id:
                 turn_record["steps"][idx] = step_obj
@@ -516,6 +546,12 @@ def run_agent_turn(
 
         emit_step(draft_step_id, "completed", f"Drafted email to {to_email}", f"Subject: {clean_subject}")
 
+        preview_data = {
+            "to": to_email,
+            "subject": clean_subject,
+            "body": clean_body,
+            "signature": display_name,
+        }
         decision = request_user_approval_sync(
             event_queue=event_queue,
             loop=loop,
@@ -523,26 +559,30 @@ def run_agent_turn(
             turn_record=turn_record,
             action_type="send_email",
             recipient=to_email,
-            preview_data={
-                "to": to_email,
-                "subject": clean_subject,
-                "body": clean_body,
-                "signature": display_name,
-            },
+            preview_data=preview_data,
         )
 
         if decision == "deny":
             emit_step(str(uuid.uuid4()), "warning", f"Cancelled sending email to {to_email}")
             return "User denied permission to send this email."
 
+        to_email = preview_data["to"]
+        clean_subject = preview_data["subject"]
+        clean_body = preview_data["body"]
+        signature = preview_data["signature"]
+
         send_step_id = str(uuid.uuid4())
         emit_step(send_step_id, "running", f"Sending email to {to_email}...")
 
         message = EmailMessage()
+        _set_sender_headers(message, display_name, user_email)
         message["To"] = to_email
         message["Subject"] = clean_subject
-        message.set_content(f"{clean_body.replace('**', '')}\n\n{display_name}")
-        message.add_alternative(build_html_email(clean_body, display_name), subtype="html")
+        plain_body = clean_body.replace("**", "")
+        if signature:
+            plain_body = f"{plain_body}\n\n{signature}" if plain_body else signature
+        message.set_content(plain_body)
+        message.add_alternative(build_html_email(clean_body, signature), subtype="html")
 
         encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
         gmail_service.users().messages().send(userId="me", body={"raw": encoded_message}).execute()
@@ -571,6 +611,12 @@ def run_agent_turn(
 
         emit_step(draft_step_id, "completed", f"Drafted reply to {orig_from}", f"Subject: {reply_subject}")
 
+        preview_data = {
+            "to": orig_from,
+            "subject": reply_subject,
+            "body": clean_body,
+            "signature": display_name,
+        }
         decision = request_user_approval_sync(
             event_queue=event_queue,
             loop=loop,
@@ -578,30 +624,33 @@ def run_agent_turn(
             turn_record=turn_record,
             action_type="reply_to_email",
             recipient=orig_from,
-            preview_data={
-                "to": orig_from,
-                "subject": reply_subject,
-                "body": clean_body,
-                "signature": display_name,
-            },
+            preview_data=preview_data,
         )
 
         if decision == "deny":
             emit_step(str(uuid.uuid4()), "warning", f"Cancelled reply to {orig_from}")
             return "User denied permission to send this reply."
 
+        reply_subject = preview_data["subject"]
+        clean_body = preview_data["body"]
+        signature = preview_data["signature"]
+
         send_step_id = str(uuid.uuid4())
         emit_step(send_step_id, "running", f"Sending reply to {orig_from}...")
 
         message = EmailMessage()
+        _set_sender_headers(message, display_name, user_email)
         message["To"] = orig_from
         message["Subject"] = reply_subject
         if orig_msg_id:
             message["In-Reply-To"] = orig_msg_id
             message["References"] = orig_msg_id
 
-        message.set_content(f"{clean_body.replace('**', '')}\n\n{display_name}")
-        message.add_alternative(build_html_email(clean_body, display_name), subtype="html")
+        plain_body = clean_body.replace("**", "")
+        if signature:
+            plain_body = f"{plain_body}\n\n{signature}" if plain_body else signature
+        message.set_content(plain_body)
+        message.add_alternative(build_html_email(clean_body, signature), subtype="html")
 
         encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
         gmail_service.users().messages().send(
@@ -844,6 +893,43 @@ async def resolve_approval(body: ApprovalDecision):
         raise HTTPException(status_code=400, detail="Invalid decision value.")
 
     record = PENDING_APPROVALS[body.approval_id]
+    if body.edits and body.decision != "deny":
+        action_type = record.get("action_type")
+        preview = record.get("preview")
+        if action_type not in {"send_email", "reply_to_email"} or not isinstance(preview, dict):
+            raise HTTPException(status_code=400, detail="This approval does not support email edits.")
+
+        if body.edits.to is not None:
+            if action_type != "send_email":
+                raise HTTPException(status_code=400, detail="The recipient cannot be changed for a reply.")
+            recipient = body.edits.to.strip()
+            address = parseaddr(recipient)[1]
+            if (
+                not recipient
+                or "\r" in recipient
+                or "\n" in recipient
+                or "," in recipient
+                or ";" in recipient
+                or not address
+                or address.count("@") != 1
+                or any(char.isspace() for char in address)
+            ):
+                raise HTTPException(status_code=400, detail="Enter one valid recipient email address.")
+            preview["to"] = recipient
+            record["recipient"] = address.lower()
+
+        if body.edits.subject is not None:
+            subject = body.edits.subject.strip()
+            if not subject or "\r" in subject or "\n" in subject:
+                raise HTTPException(status_code=400, detail="Email subject cannot be empty or contain new lines.")
+            preview["subject"] = subject
+
+        if body.edits.body is not None:
+            preview["body"] = body.edits.body.strip()
+
+        if body.edits.signature is not None:
+            preview["signature"] = body.edits.signature.strip()
+
     record["decision"] = body.decision
     record["event"].set()
     return {"status": "ok", "decision": body.decision}

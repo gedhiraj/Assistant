@@ -82,11 +82,288 @@
       background: #1a1a1a;
     }
 
+    .activity-list {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      margin-left: 4px;
+      padding-left: 8px;
+      border-left: 1px solid #292929;
+    }
+    .activity-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      min-height: 27px;
+      padding: 3px 5px;
+      border-radius: 6px;
+      transition: background-color 120ms ease;
+    }
+    .activity-row:hover { background: #171717; }
+    .activity-icon {
+      width: 21px;
+      height: 21px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      border: 1px solid #2c2c2c;
+      border-radius: 6px;
+      background: #1b1b1b;
+    }
+    .activity-copy {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px 8px;
+      flex: 1;
+      min-width: 0;
+      padding-top: 2px;
+    }
+    .activity-label {
+      color: #b8b8b8;
+      font-size: 12px;
+      line-height: 17px;
+    }
+    .activity-row[data-status="running"] .activity-label { color: #e2e2e2; }
+    .activity-row[data-status="warning"] .activity-label { color: #d29922; }
+    .activity-detail {
+      display: inline-block;
+      max-width: min(440px, 100%);
+      overflow: hidden;
+      padding: 1px 5px;
+      border: 1px solid #292929;
+      border-radius: 4px;
+      background: #151515;
+      color: #8b949e;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .activity-state {
+      width: 13px;
+      height: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      margin-left: auto;
+    }
+    .activity-spinner {
+      width: 11px;
+      height: 11px;
+      border: 1.5px solid #3a3a3a;
+      border-top-color: #58a6ff;
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }
+
     @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes cube-glow {
+      0%, 100% { opacity: 0.22; }
+      50% { opacity: 0.72; }
+    }
+
+    .chat-cube-backdrop {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      overflow: hidden;
+      pointer-events: none;
+      background:
+        radial-gradient(ellipse at 50% 35%, rgba(31, 65, 103, 0.12), transparent 58%),
+        #0f0f0f;
+    }
+    .chat-cube-backdrop::before,
+    .chat-cube-backdrop::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+    }
+    .chat-cube-backdrop::before {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='42' height='38' viewBox='0 0 58 52'%3E%3Cpath d='M29 1 57 16.5v19L29 51 1 35.5v-19L29 1Zm0 0v19.2M1 16.5l28 16 28-16M29 32.5V51' fill='none' stroke='%237c9bb8' stroke-opacity='.20' stroke-width='1'/%3E%3C/svg%3E");
+      background-size: 42px 38px;
+      opacity: 0.48;
+      -webkit-mask-image: radial-gradient(ellipse at 50% 44%, #000 8%, rgba(0, 0, 0, 0.8) 52%, transparent 100%);
+      mask-image: radial-gradient(ellipse at 50% 44%, #000 8%, rgba(0, 0, 0, 0.8) 52%, transparent 100%);
+    }
+    .chat-cube-backdrop::after {
+      background-image: radial-gradient(ellipse 16px 13px at center, rgba(88, 166, 255, 0.22), rgba(88, 166, 255, 0.05) 52%, transparent 100%);
+      background-size: 84px 76px;
+      background-position: 21px 19px;
+      animation: cube-glow 6s ease-in-out infinite;
+      -webkit-mask-image: radial-gradient(ellipse at 50% 44%, #000 8%, rgba(0, 0, 0, 0.8) 52%, transparent 100%);
+      mask-image: radial-gradient(ellipse at 50% 44%, #000 8%, rgba(0, 0, 0, 0.8) 52%, transparent 100%);
+    }
+    .cursor-glitter-layer {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      overflow: hidden;
+      pointer-events: none;
+    }
+    .cursor-glitter {
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      pointer-events: none;
+      filter: drop-shadow(0 0 7px rgba(132, 204, 22, 0.5));
+      animation: cursor-glitter-fade 2.45s ease-out forwards;
+    }
+    .cursor-glitter span {
+      position: absolute;
+      width: 4px;
+      height: 4px;
+      border-radius: 1px;
+    }
+    .cursor-glitter span:nth-child(1) { top: 1px; left: 6px; background: #f59e0b; }
+    .cursor-glitter span:nth-child(2) { top: 6px; right: 1px; background: #84cc16; }
+    .cursor-glitter span:nth-child(3) { bottom: 1px; left: 6px; background: #22c55e; }
+    .cursor-glitter span:nth-child(4) { top: 6px; left: 1px; background: #166534; }
+    .cursor-glitter::after {
+      content: "";
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      width: 2px;
+      height: 2px;
+      border-radius: 50%;
+      background: #f0ffd0;
+      box-shadow: 0 0 5px 2px rgba(190, 242, 100, 0.55);
+    }
+    @keyframes cursor-glitter-fade {
+      0% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.35) rotate(0deg);
+      }
+      12% {
+        opacity: 0.96;
+        transform: translate(-50%, -50%) scale(var(--sparkle-scale, 1)) rotate(18deg);
+      }
+      100% {
+        opacity: 0;
+        transform: translate3d(calc(-50% + var(--drift-x)), calc(-50% + var(--drift-y)), 0) scale(0.2) rotate(var(--rotation));
+      }
+    }
+    #chatScroll,
+    #composerDock {
+      position: relative;
+      z-index: 1;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .chat-cube-backdrop::after { animation: none; opacity: 0.28; }
+      .cursor-glitter { animation-duration: 1.2s; }
+    }
+
+    @media (max-width: 1023px) {
+      #inspectorDrawer:not(.hidden) {
+        position: fixed;
+        top: 40px;
+        right: 0;
+        bottom: 0;
+        z-index: 45;
+        width: min(90vw, 24rem);
+        box-shadow: -18px 0 48px rgba(0, 0, 0, 0.42);
+      }
+    }
+
+    @media (max-width: 900px) {
+      body { height: 100dvh; }
+
+      header {
+        position: relative;
+        z-index: 60;
+        padding-left: 10px;
+        padding-right: 10px;
+      }
+      #topSessionTitle { display: none; }
+      #mobileSidebarButton { min-width: 36px; min-height: 36px; }
+
+      #sidebar:not(.mobile-open) { display: none; }
+      #sidebar.mobile-open {
+        position: fixed;
+        top: 40px;
+        bottom: 0;
+        left: 0;
+        z-index: 50;
+        display: flex;
+        width: min(84vw, 300px);
+        max-width: 300px;
+        box-shadow: 18px 0 48px rgba(0, 0, 0, 0.48);
+      }
+      #mobileSidebarBackdrop:not(.hidden) {
+        position: fixed;
+        inset: 40px 0 0;
+        z-index: 40;
+        display: block;
+      }
+
+      #chatScroll {
+        padding: 16px 12px;
+      }
+      #chatFeed {
+        width: 100%;
+        min-width: 0;
+      }
+      #composerDock {
+        padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
+      }
+      #composerDock > div {
+        width: 100%;
+        max-width: none;
+      }
+      #promptInput {
+        min-height: 48px;
+        font-size: 16px;
+      }
+      #composerShortcuts {
+        gap: 8px 14px;
+      }
+      #composerDock button { min-height: 36px; }
+      #composerDock #sendBtn {
+        width: 36px;
+        height: 36px;
+        flex: 0 0 auto;
+      }
+      .markdown-body,
+      .approval-preview-body {
+        overflow-wrap: anywhere;
+      }
+      .markdown-body pre {
+        max-width: 100%;
+        overflow-x: auto;
+      }
+      .markdown-body table {
+        display: block;
+        max-width: 100%;
+        overflow-x: auto;
+      }
+      #permissionsModal > div,
+      #loginGateModal > div {
+        max-height: calc(100dvh - 2rem);
+        overflow-y: auto;
+      }
+    }
+
+    @media (max-width: 380px) {
+      header { padding-left: 6px; padding-right: 6px; }
+      #composerDock { padding-left: 8px; padding-right: 8px; }
+      #chatScroll { padding-left: 8px; padding-right: 8px; }
+      #composerShortcuts { font-size: 11px; }
+      #composerShortcuts > button { gap: 4px; }
+    }
+
+    @media (max-height: 500px) and (max-width: 900px) {
+      #composerDock { padding-bottom: 6px; }
+      #chatScroll { padding-top: 8px; padding-bottom: 8px; }
+    }
+
     .animate-spin-fast { animation: spin 0.75s linear infinite; }
   </style>
 </head>
-<body class="flex flex-col h-screen w-screen select-none">
+<body class="flex flex-col h-screen w-full select-none">
 
   <!-- Top App Window Bar -->
   <header class="h-10 bg-[#141414] border-b border-[#242424] px-3 flex items-center justify-between shrink-0">
@@ -101,7 +378,7 @@
       <span class="text-xs font-medium text-[#e6e6e6] tracking-tight">d25 assistant</span>
 
       <div class="flex items-center gap-1 ml-2 text-[#8a8a8a]">
-        <button onclick="toggleSidebar()" title="Toggle sidebar" class="p-1 rounded hover:bg-[#222222] hover:text-[#e6e6e6] transition">
+        <button id="mobileSidebarButton" onclick="toggleSidebar()" title="Toggle sidebar" aria-controls="sidebar" aria-expanded="true" class="p-1 rounded hover:bg-[#222222] hover:text-[#e6e6e6] transition">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
             <path d="M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 13.5v-11ZM3.5 2a.5.5 0 0 0-.5.5v11a.5.5 0 0 0 .5.5H6V2H3.5ZM7 2v12h5.5a.5.5 0 0 0 .5-.5v-11a.5.5 0 0 0-.5-.5H7Z"/>
           </svg>
@@ -128,6 +405,8 @@
       </button>
     </div>
   </header>
+
+  <div id="mobileSidebarBackdrop" class="hidden bg-black/60" onclick="toggleSidebar()" aria-hidden="true"></div>
 
   <!-- Main 3-Pane Body -->
   <div class="flex flex-1 min-h-0 overflow-hidden">
@@ -262,7 +541,10 @@
     </aside>
 
     <!-- Center Chat Area -->
-    <section class="flex-1 flex flex-col min-w-0 bg-[#0f0f0f] relative">
+    <section id="chatArea" class="flex-1 flex flex-col min-w-0 bg-[#0f0f0f] relative">
+      <div class="chat-cube-backdrop" aria-hidden="true">
+        <div id="cursorGlitter" class="cursor-glitter-layer"></div>
+      </div>
 
       <!-- Scrollable Conversation Feed -->
       <div id="chatScroll" class="flex-1 overflow-y-auto px-6 py-6 select-text">
@@ -283,7 +565,7 @@
       </div>
 
       <!-- Composer Container -->
-      <div id="composerDock" class="px-6 pb-8 pt-2 bg-[#0f0f0f] shrink-0">
+      <div id="composerDock" class="px-6 pb-8 pt-2 shrink-0">
         <div class="max-w-2xl mx-auto">
           <div class="rounded-xl bg-[#171717] border border-[#2c2c2c] focus-within:border-[#454545] transition shadow-xl">
             <textarea
@@ -320,7 +602,7 @@
             </div>
           </div>
 
-          <div class="mt-2.5 px-1 flex flex-wrap items-center gap-4 text-xs text-[#8a8a8a]">
+          <div id="composerShortcuts" class="mt-2.5 px-1 flex flex-wrap items-center gap-4 text-xs text-[#8a8a8a]">
             <button onclick="usePrompt('Summarize today\'s emails from my Primary Inbox with important points')" class="flex items-center gap-1.5 hover:text-[#ececec] transition">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
                 <path d="M1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 14H1.75A1.75 1.75 0 0 1 0 12.25v-8.5C0 2.784.784 2 1.75 2Z"/>
@@ -411,6 +693,130 @@
     let turnStartTime = null;
     let timerInterval = null;
 
+    function syncSidebarControl() {
+      const sidebar = document.getElementById("sidebar");
+      const backdrop = document.getElementById("mobileSidebarBackdrop");
+      const button = document.getElementById("mobileSidebarButton");
+      const isMobile = window.matchMedia("(max-width: 900px)").matches;
+
+      if (!isMobile) {
+        sidebar.classList.remove("mobile-open");
+        backdrop.classList.add("hidden");
+      }
+
+      const expanded = isMobile
+        ? sidebar.classList.contains("mobile-open")
+        : !sidebar.classList.contains("hidden");
+      button.setAttribute("aria-expanded", String(expanded));
+    }
+
+    window.addEventListener("resize", syncSidebarControl);
+    syncSidebarControl();
+
+    const chatArea = document.getElementById("chatArea");
+    const cursorGlitter = document.getElementById("cursorGlitter");
+    let pointerFramePending = false;
+    let lastGlitterPosition = null;
+    let distanceSinceGlitter = 0;
+    let pointerInsideChat = false;
+    const pendingPointerPositions = [];
+
+    function spawnCursorGlitter(x, y, directionX, directionY) {
+      const sparkle = document.createElement("span");
+      sparkle.className = "cursor-glitter";
+      sparkle.style.left = `${x}px`;
+      sparkle.style.top = `${y}px`;
+
+      const angle = Math.atan2(directionY, directionX) + (Math.random() - 0.5) * 1.4;
+      const drift = 5 + Math.random() * 13;
+      sparkle.style.setProperty("--drift-x", `${Math.cos(angle) * drift}px`);
+      sparkle.style.setProperty("--drift-y", `${Math.sin(angle) * drift}px`);
+      sparkle.style.setProperty("--rotation", `${(Math.random() - 0.5) * 90}deg`);
+      sparkle.style.setProperty("--sparkle-scale", `${0.8 + Math.random() * 0.6}`);
+      if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        sparkle.style.animationDuration = `${2.2 + Math.random() * 0.6}s`;
+      }
+      sparkle.innerHTML = "<span></span><span></span><span></span><span></span>";
+      sparkle.addEventListener("animationend", () => sparkle.remove(), { once: true });
+
+      if (cursorGlitter.childElementCount >= 120) {
+        cursorGlitter.firstElementChild.remove();
+      }
+      cursorGlitter.appendChild(sparkle);
+    }
+
+    function processCursorTrail() {
+      pointerFramePending = false;
+      const bounds = chatArea.getBoundingClientRect();
+      const positions = pendingPointerPositions.splice(0);
+
+      for (const position of positions) {
+        const current = {
+          x: position.x - bounds.left,
+          y: position.y - bounds.top,
+        };
+
+        if (!lastGlitterPosition) {
+          spawnCursorGlitter(current.x, current.y, 0, 0);
+          lastGlitterPosition = current;
+          continue;
+        }
+
+        const dx = current.x - lastGlitterPosition.x;
+        const dy = current.y - lastGlitterPosition.y;
+        const distance = Math.hypot(dx, dy);
+        const spacing = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 30 : 14;
+        const accumulatedDistance = distanceSinceGlitter + distance;
+        const count = Math.floor(accumulatedDistance / spacing);
+        const firstSparkDistance = spacing - distanceSinceGlitter;
+        const firstIndex = Math.max(1, count - 23);
+
+        for (let index = firstIndex; index <= count; index += 1) {
+          const along = (firstSparkDistance + (index - 1) * spacing) / distance;
+          spawnCursorGlitter(
+            lastGlitterPosition.x + dx * along,
+            lastGlitterPosition.y + dy * along,
+            dx,
+            dy,
+          );
+        }
+
+        distanceSinceGlitter = accumulatedDistance - count * spacing;
+        lastGlitterPosition = current;
+      }
+
+      if (!pointerInsideChat) {
+        lastGlitterPosition = null;
+        distanceSinceGlitter = 0;
+      }
+    }
+
+    function scheduleCursorTrail() {
+      if (pointerFramePending) return;
+      pointerFramePending = true;
+      requestAnimationFrame(processCursorTrail);
+    }
+
+    chatArea.addEventListener("pointermove", (event) => {
+      if (event.pointerType === "touch") return;
+      pointerInsideChat = true;
+      if (pendingPointerPositions.length >= 128) {
+        pendingPointerPositions.splice(0, pendingPointerPositions.length - 127);
+      }
+      pendingPointerPositions.push({ x: event.clientX, y: event.clientY });
+      scheduleCursorTrail();
+    });
+
+    chatArea.addEventListener("pointerleave", () => {
+      pointerInsideChat = false;
+      if (pendingPointerPositions.length) {
+        scheduleCursorTrail();
+      } else {
+        lastGlitterPosition = null;
+        distanceSinceGlitter = 0;
+      }
+    });
+
     // Boot: verify Google auth status first, then load trusted recipients and saved sessions
     initApp();
 
@@ -445,7 +851,15 @@
     }
 
     function toggleSidebar() {
-      document.getElementById("sidebar").classList.toggle("hidden");
+      const sidebar = document.getElementById("sidebar");
+      if (window.matchMedia("(max-width: 900px)").matches) {
+        const isOpen = !sidebar.classList.contains("mobile-open");
+        sidebar.classList.toggle("mobile-open", isOpen);
+        document.getElementById("mobileSidebarBackdrop").classList.toggle("hidden", !isOpen);
+      } else {
+        sidebar.classList.toggle("hidden");
+      }
+      syncSidebarControl();
     }
 
     function autoResize(el) {
@@ -510,6 +924,67 @@
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+    }
+
+    function renderActivityStep(step) {
+      const label = String(step.label || "Working...");
+      const detail = String(step.detail || "");
+      const status = step.status === "running" || step.status === "warning" ? step.status : "completed";
+      const searchText = `${label} ${detail}`.toLowerCase();
+      let kind = "tool";
+
+      if (status === "warning") {
+        kind = "warning";
+      } else if (/thinking|switching|model .* busy/.test(searchText)) {
+        kind = "thinking";
+      } else if (/permission|approv|trusted/.test(searchText)) {
+        kind = "permission";
+      } else if (/draft|compos/.test(searchText)) {
+        kind = "draft";
+      } else if (/send|sent|reply/.test(searchText)) {
+        kind = "send";
+      } else if (/archive|trash|mark_read|applying|completed/.test(searchText)) {
+        kind = "manage";
+      } else if (/fetch|inbox|email|search|query/.test(searchText)) {
+        kind = "inbox";
+      }
+
+      const icons = {
+        thinking: { color: "#a371f7", path: '<path d="M12 3v2m0 14v2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42M3 12h2m14 0h2M5.64 18.36l1.42-1.42m9.88-9.88 1.42-1.42"/><circle cx="12" cy="12" r="4"/>' },
+        inbox: { color: "#58a6ff", path: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>' },
+        draft: { color: "#d2a8ff", path: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/>' },
+        send: { color: "#3fb950", path: '<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>' },
+        permission: { color: "#d29922", path: '<path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z"/><path d="m9 12 2 2 4-4"/>' },
+        manage: { color: "#f0883e", path: '<path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="m9 13 2 2 4-4"/>' },
+        warning: { color: "#d29922", path: '<path d="M12 3 2.8 19h18.4L12 3Z"/><path d="M12 9v4m0 3h.01"/>' },
+        tool: { color: "#8b949e", path: '<path d="m14.7 6.3 3-3a5 5 0 0 0-6.4 6.4l-7.8 7.8a2 2 0 0 0 2.8 2.8l7.8-7.8a5 5 0 0 0 6.4-6.4l-3 3-2.8-2.8Z"/>' },
+      };
+      const icon = icons[kind];
+      const iconHtml = `<span class="activity-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${icon.color}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon.path}</svg></span>`;
+      const statusHtml =
+        status === "running"
+          ? `<span class="activity-state" title="In progress"><span class="activity-spinner"></span></span>`
+          : status === "warning"
+          ? `<span class="activity-state text-[#d29922]" title="Needs attention">!</span>`
+          : `<span class="activity-state text-[#3fb950]" title="Completed"><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg></span>`;
+      const detailHtml = detail
+        ? `<code class="activity-detail" title="${escapeHtml(detail)}">${escapeHtml(detail)}</code>`
+        : "";
+
+      return `
+        <div class="activity-row" data-status="${status}"${step.id ? ` data-step-id="${escapeHtml(step.id)}"` : ""}>
+          ${iconHtml}
+          <div class="activity-copy">
+            <span class="activity-label">${escapeHtml(label)}</span>
+            ${detailHtml}
+          </div>
+          ${statusHtml}
+        </div>
+      `;
+    }
+
+    function thoughtIconSvg() {
+      return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z"/><path d="m19 14 .9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9Z"/></svg>`;
     }
 
     // Load & Render Saved Sessions from MongoDB
@@ -583,19 +1058,7 @@
       const turn = document.createElement("div");
       turn.className = "space-y-3";
       const stepsHtml = (msg.steps || [])
-        .map((st) => {
-          const icon =
-            st.status === "warning"
-              ? `<svg width="13" height="13" viewBox="0 0 16 16" fill="#d29922" class="shrink-0"><path d="M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575ZM8 5a.75.75 0 0 0-.75.75v2.5a.75.75 0 0 0 1.5 0v-2.5A.75.75 0 0 0 8 5Zm1 6a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg>`
-              : `<svg width="13" height="13" viewBox="0 0 16 16" fill="#3fb950" class="shrink-0"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg>`;
-          return `
-            <div class="flex items-center gap-2 text-[#b8b8b8]">
-              ${icon}
-              <span class="truncate">${escapeHtml(st.label)}</span>
-              ${st.detail ? `<span class="text-[#6e6e6e] truncate">· ${escapeHtml(st.detail)}</span>` : ""}
-            </div>
-          `;
-        })
+        .map((st) => renderActivityStep(st))
         .join("");
 
       const approvalsHtml = (msg.approvals || [])
@@ -615,10 +1078,10 @@
 
       turn.innerHTML = `
         <div class="flex items-center gap-2 text-xs text-[#8a8a8a]">
-          <span class="w-2 h-2 rounded-full bg-[#3fb950]"></span>
+          <span class="text-[#a371f7]">${thoughtIconSvg()}</span>
           <span>Thought for ${msg.duration_sec || 1}s</span>
         </div>
-        <div class="space-y-1.5 text-xs pl-1">${stepsHtml}</div>
+        <div class="activity-list text-xs">${stepsHtml}</div>
         ${approvalsHtml ? `<div class="space-y-2">${approvalsHtml}</div>` : ""}
         <div class="markdown-body pt-1">${marked.parse(msg.assistant_reply || "")}</div>
       `;
@@ -652,10 +1115,10 @@
       turn.className = "space-y-3";
       turn.innerHTML = `
         <div class="flex items-center gap-2 text-xs text-[#8a8a8a]">
-          <span class="timer-dot w-2 h-2 rounded-full bg-[#3fb950] animate-pulse"></span>
+          <span class="timer-dot text-[#a371f7] animate-pulse">${thoughtIconSvg()}</span>
           <span class="timer-label">0s</span>
         </div>
-        <div class="steps-list space-y-1.5 text-xs pl-1"></div>
+        <div class="steps-list activity-list text-xs"></div>
         <div class="approvals-slot space-y-3"></div>
         <div class="reply-slot markdown-body hidden pt-1"></div>
       `;
@@ -686,31 +1149,13 @@
 
     function upsertStep(turnEl, step) {
       const list = turnEl.querySelector(".steps-list");
-      let row = list.querySelector(`[data-step-id="${step.id}"]`);
-
-      let iconHtml = "";
-      if (step.status === "running") {
-        iconHtml = `<span class="w-3 h-3 rounded-full border-2 border-[#9b9b9b] border-t-transparent animate-spin-fast inline-block shrink-0"></span>`;
-      } else if (step.status === "completed") {
-        iconHtml = `<svg width="13" height="13" viewBox="0 0 16 16" fill="#3fb950" class="shrink-0"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg>`;
+      const existingRow = Array.from(list.children).find((row) => row.getAttribute("data-step-id") === String(step.id));
+      const activityHtml = renderActivityStep(step);
+      if (existingRow) {
+        existingRow.outerHTML = activityHtml;
       } else {
-        iconHtml = `<svg width="13" height="13" viewBox="0 0 16 16" fill="#d29922" class="shrink-0"><path d="M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575ZM8 5a.75.75 0 0 0-.75.75v2.5a.75.75 0 0 0 1.5 0v-2.5A.75.75 0 0 0 8 5Zm1 6a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg>`;
+        list.insertAdjacentHTML("beforeend", activityHtml);
       }
-
-      const contentHtml = `
-        <div class="flex items-center gap-2 text-[#b8b8b8]">
-          ${iconHtml}
-          <span class="truncate">${escapeHtml(step.label)}</span>
-          ${step.detail ? `<span class="text-[#6e6e6e] truncate">· ${escapeHtml(step.detail)}</span>` : ""}
-        </div>
-      `;
-
-      if (!row) {
-        row = document.createElement("div");
-        row.setAttribute("data-step-id", step.id);
-        list.appendChild(row);
-      }
-      row.innerHTML = contentHtml;
       scrollToBottom();
     }
 
@@ -736,14 +1181,18 @@
         ? `
           <div class="p-4 border-b border-[#262626] space-y-2 text-xs">
             <div class="flex items-center justify-between">
-              <span class="text-[#8a8a8a]">To: <strong class="text-[#ececec]">${escapeHtml(data.preview.to)}</strong></span>
-              <button onclick='openInspector(${JSON.stringify(data.preview.subject)}, ${JSON.stringify(data.preview.to)}, ${JSON.stringify(data.preview.body)}, ${JSON.stringify(data.preview.signature)})' class="text-[#8a8a8a] hover:text-[#ececec] flex items-center gap-1">
+              <span class="text-[#8a8a8a]">To: <strong class="text-[#ececec]" data-preview-field="to">${escapeHtml(data.preview.to)}</strong></span>
+              <button onclick="openApprovalPreview('${data.approval_id}')" class="text-[#8a8a8a] hover:text-[#ececec] flex items-center gap-1">
                 <span>View preview</span>
                 <span>↗</span>
               </button>
             </div>
-            <div class="text-[#8a8a8a]">Subject: <span class="text-[#ececec]">${escapeHtml(data.preview.subject)}</span></div>
-            <div class="mt-2 p-3 rounded-lg bg-[#121212] border border-[#262626] text-[#dcdcdc] whitespace-pre-wrap leading-relaxed">${escapeHtml(data.preview.body)}\n\n<strong class="text-[#ffffff]">${escapeHtml(data.preview.signature)}</strong></div>
+            <div class="flex items-center justify-between gap-3">
+              <div class="text-[#8a8a8a]">Subject: <span class="text-[#ececec]" data-preview-field="subject">${escapeHtml(data.preview.subject)}</span></div>
+              <button type="button" onclick="toggleApprovalEditor('${data.approval_id}')" class="approval-edit-toggle shrink-0 px-3 py-1.5 rounded-md bg-[#1f6feb] hover:bg-[#388bfd] text-[11px] font-medium text-white transition">Edit email</button>
+            </div>
+            <div class="approval-preview-body mt-2 p-3 rounded-lg bg-[#121212] border border-[#262626] text-[#dcdcdc] whitespace-pre-wrap leading-relaxed" data-preview-field="body">${escapeHtml(data.preview.body)}${data.preview.signature ? `\n\n<strong class="text-[#ffffff]">${escapeHtml(data.preview.signature)}</strong>` : ""}</div>
+            <p class="text-[11px] text-[#8a8a8a]">Use Edit email to change the greeting, message, or signature before sending.</p>
           </div>
         `
         : `
@@ -752,12 +1201,46 @@
           </div>
         `;
 
+      const editorBlock = isEmail
+        ? `
+          <div class="approval-editor hidden p-4 border-b border-[#262626] space-y-3">
+            ${
+              data.action_type === "send_email"
+                ? `<label class="block space-y-1">
+                    <span class="text-[11px] text-[#8a8a8a]">To</span>
+                    <input data-edit-field="to" type="text" value="${escapeHtml(data.preview.to)}" class="w-full rounded-md bg-[#121212] border border-[#333333] px-2.5 py-2 text-xs text-[#ececec] focus:outline-none focus:border-[#58a6ff]">
+                  </label>`
+                : ""
+            }
+            <label class="block space-y-1">
+              <span class="text-[11px] text-[#8a8a8a]">Subject</span>
+              <input data-edit-field="subject" type="text" value="${escapeHtml(data.preview.subject)}" class="w-full rounded-md bg-[#121212] border border-[#333333] px-2.5 py-2 text-xs text-[#ececec] focus:outline-none focus:border-[#58a6ff]">
+            </label>
+            <label class="block space-y-1">
+              <span class="text-[11px] text-[#8a8a8a]">Message</span>
+              <textarea data-edit-field="body" rows="5" class="w-full rounded-md bg-[#121212] border border-[#333333] px-2.5 py-2 text-xs text-[#ececec] leading-relaxed resize-y focus:outline-none focus:border-[#58a6ff]">${escapeHtml(data.preview.body)}</textarea>
+            </label>
+            <label class="block space-y-1">
+              <span class="text-[11px] text-[#8a8a8a]">Signature (optional)</span>
+              <input data-edit-field="signature" type="text" value="${escapeHtml(data.preview.signature || "")}" placeholder="Remove the text to omit your signature" class="w-full rounded-md bg-[#121212] border border-[#333333] px-2.5 py-2 text-xs text-[#ececec] focus:outline-none focus:border-[#58a6ff]">
+            </label>
+            <div class="flex items-center justify-between gap-3">
+              <span class="approval-edit-error text-[11px] text-[#f85149]" role="alert"></span>
+              <button type="button" onclick="updateApprovalDraft('${data.approval_id}')" class="px-3 py-1.5 rounded-md bg-[#222222] hover:bg-[#2c2c2c] border border-[#333333] text-xs text-[#ececec] transition">Update draft</button>
+            </div>
+          </div>
+        `
+        : "";
+
       card.innerHTML = `
         <div class="px-4 py-2.5 bg-[#1c1c1c] border-b border-[#262626] flex items-center justify-between">
           <span class="text-xs font-semibold text-[#ececec]">${headerLabel}</span>
-          <span class="text-[11px] text-[#3fb950] font-medium">Permission required</span>
+          <div class="flex items-center gap-3">
+            <span class="text-[11px] text-[#3fb950] font-medium">Permission required</span>
+          </div>
         </div>
         ${summaryBlock}
+        ${editorBlock}
         <div class="approval-options divide-y divide-[#242424] text-xs">
           <button onclick="submitApproval('${data.approval_id}', 'allow_once')" class="w-full px-4 py-2.5 text-left hover:bg-[#222222] transition flex items-center gap-3 text-[#ececec]">
             <span class="text-[#7d7d7d] font-mono">1.</span>
@@ -767,7 +1250,7 @@
             data.recipient
               ? `<button onclick="submitApproval('${data.approval_id}', 'allow_always')" class="w-full px-4 py-2.5 text-left hover:bg-[#222222] transition flex items-center gap-3 text-[#ececec]">
                    <span class="text-[#7d7d7d] font-mono">2.</span>
-                   <span>Allow always for <strong>${escapeHtml(data.recipient)}</strong></span>
+                   <span>Allow always for <strong data-trust-recipient>${escapeHtml(data.recipient)}</strong></span>
                  </button>`
               : ""
           }
@@ -777,6 +1260,7 @@
           </button>
         </div>
         <div class="approval-footer px-4 py-2.5 bg-[#141414] border-t border-[#262626] flex items-center justify-end gap-2">
+          <span class="approval-submit-error text-[11px] text-[#f85149] mr-auto" role="alert"></span>
           <button onclick="submitApproval('${data.approval_id}', 'deny')" class="px-3 py-1 rounded-md bg-[#222222] hover:bg-[#2c2c2c] border border-[#333333] text-xs text-[#d4d4d4] transition">
             Cancel <span class="text-[10px] text-[#7d7d7d] ml-1">Esc</span>
           </button>
@@ -785,13 +1269,130 @@
           </button>
         </div>
       `;
-
+      card.dataset.actionType = data.action_type;
+      card.dataset.signature = data.preview.signature || "";
+      card.dataset.previewBody = data.preview.body || "";
       slot.appendChild(card);
       scrollToBottom();
     }
 
+    function toggleApprovalEditor(approvalId) {
+      const card = document.getElementById(`approval-${approvalId}`);
+      const editor = card && card.querySelector(".approval-editor");
+      if (!editor) return;
+
+      editor.classList.toggle("hidden");
+      const toggle = card.querySelector(".approval-edit-toggle");
+      const isOpen = !editor.classList.contains("hidden");
+      if (toggle) toggle.textContent = isOpen ? "Close editor" : "Edit email";
+      if (isOpen) editor.querySelector("[data-edit-field='body']").focus();
+    }
+
+    function updateApprovalDraft(approvalId) {
+      const card = document.getElementById(`approval-${approvalId}`);
+      if (!card) return null;
+
+      const subjectField = card.querySelector("[data-edit-field='subject']");
+      const bodyField = card.querySelector("[data-edit-field='body']");
+      const signatureField = card.querySelector("[data-edit-field='signature']");
+      const toField = card.querySelector("[data-edit-field='to']");
+      const error = card.querySelector(".approval-edit-error");
+      const subject = subjectField.value.trim();
+      const body = bodyField.value.trim();
+      const signature = signatureField.value.trim();
+      const edits = { subject, body, signature };
+
+      if (!subject || /[\r\n]/.test(subject)) {
+        error.textContent = "Enter a subject on one line.";
+        subjectField.focus();
+        return null;
+      }
+
+      if (toField) {
+        const to = toField.value.trim();
+        const bracketAddress = to.match(/<([^<>]+)>/);
+        const address = bracketAddress ? bracketAddress[1].trim() : to;
+        if (/[\r\n,;]/.test(to) || !/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(address)) {
+          error.textContent = "Enter one valid recipient email address.";
+          toField.focus();
+          return null;
+        }
+        edits.to = to;
+      }
+
+      error.textContent = "";
+      const toPreview = card.querySelector("[data-preview-field='to']");
+      const subjectPreview = card.querySelector("[data-preview-field='subject']");
+      const bodyPreview = card.querySelector("[data-preview-field='body']");
+      if (edits.to && toPreview) {
+        toPreview.textContent = edits.to;
+        const trustedRecipient = card.querySelector("[data-trust-recipient]");
+        if (trustedRecipient) trustedRecipient.textContent = edits.to;
+      }
+      subjectPreview.textContent = edits.subject;
+      bodyPreview.innerHTML = `${escapeHtml(edits.body)}${edits.signature ? `\n\n<strong class="text-[#ffffff]">${escapeHtml(edits.signature)}</strong>` : ""}`;
+      card.dataset.previewBody = edits.body;
+      card.dataset.signature = edits.signature;
+
+      const editor = card.querySelector(".approval-editor");
+      if (editor) editor.classList.add("hidden");
+      const toggle = card.querySelector(".approval-edit-toggle");
+      if (toggle) toggle.textContent = "Edit email";
+      openInspector(
+        edits.subject,
+        toPreview.textContent,
+        edits.body,
+        edits.signature,
+      );
+      return edits;
+    }
+
+    function openApprovalPreview(approvalId) {
+      const card = document.getElementById(`approval-${approvalId}`);
+      if (!card) return;
+      openInspector(
+        card.querySelector("[data-preview-field='subject']").textContent,
+        card.querySelector("[data-preview-field='to']").textContent,
+        card.dataset.previewBody || "",
+        card.dataset.signature || "",
+      );
+    }
+
+    function isCompletedSendStep(step) {
+      return (
+        step.status === "completed" &&
+        /^(?:Sending (?:email|reply) to |Sent (?:email|reply) to )/i.test(String(step.label || ""))
+      );
+    }
+
     async function submitApproval(approvalId, decision) {
       const card = document.getElementById(`approval-${approvalId}`);
+      let edits = null;
+      if (card && decision !== "deny" && (card.dataset.actionType === "send_email" || card.dataset.actionType === "reply_to_email")) {
+        edits = updateApprovalDraft(approvalId);
+        if (!edits) return;
+      }
+
+      let response;
+      try {
+        response = await fetch(`${API_BASE}/api/approve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approval_id: approvalId, decision, edits }),
+        });
+      } catch (error) {
+        const errorSlot = card && card.querySelector(".approval-submit-error");
+        if (errorSlot) errorSlot.textContent = `Could not submit approval: ${error.message}`;
+        return;
+      }
+
+      const result = await response.json();
+      if (!response.ok) {
+        const errorSlot = card && card.querySelector(".approval-submit-error");
+        if (errorSlot) errorSlot.textContent = result.detail || `Approval failed (${response.status}).`;
+        return;
+      }
+
       if (card) {
         const options = card.querySelector(".approval-options");
         const footer = card.querySelector(".approval-footer");
@@ -806,12 +1407,6 @@
           footer.innerHTML = `<span class="text-xs text-[#8a8a8a]">Status: <strong class="text-[#ececec]">${statusText}</strong></span>`;
         }
       }
-
-      await fetch(`${API_BASE}/api/approve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approval_id: approvalId, decision }),
-      });
 
       if (decision === "allow_always") {
         refreshTrustedCount();
@@ -890,6 +1485,7 @@
               sessionId = payload.session_id;
             } else if (payload.type === "step") {
               upsertStep(turnEl, payload);
+              if (isCompletedSendStep(payload)) closeInspector();
             } else if (payload.type === "approval_required") {
               renderApprovalCard(turnEl, payload);
             } else if (payload.type === "message") {
