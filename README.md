@@ -339,4 +339,4 @@ if __name__ == "__main__":
 3. `"Check my unread emails and mark the promotional ones as read."`
 4. `"Reply to the latest email from gedhiraj@gmail.com saying thanks, I got your reply."`
 
-Would you like to add **Google Calendar** tools next so D25 can also check your free slots and schedule meetings straight from email summaries?
+The web chatbot can also work with Google Calendar in the conversation. Try asking it to show upcoming events, schedule a meeting, reschedule an event, or cancel one. Calendar changes are previewed in the chat and require your approval before guests are notified.

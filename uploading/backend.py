@@ -27,6 +27,18 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+from calendar_tools import (
+    CalendarEventInput,
+    calendar_api_error,
+    calendar_attendees,
+    calendar_event_body,
+    calendar_service,
+    parse_calendar_date,
+    parse_calendar_datetime,
+    public_calendar_event,
+)
 
 load_dotenv()
 
@@ -709,9 +721,370 @@ def run_agent_turn(
         emit_step(mod_step_id, "completed", f"Completed '{action}' on {len(message_ids)} email(s)")
         return f"Successfully performed '{action}' on {len(message_ids)} email(s)."
 
-    today_str = datetime.date.today().strftime("%Y/%m/%d")
+    def calendar_tool_error(step_id: str, label: str, error: Exception) -> str:
+        if isinstance(error, HttpError):
+            detail = calendar_api_error(error).detail
+        elif isinstance(error, HTTPException):
+            detail = error.detail
+        elif isinstance(error, ValueError):
+            detail = str(error) or "The Calendar request contains invalid date or time values."
+        else:
+            raise error
+        emit_step(step_id, "warning", label, str(detail))
+        return f"{label}: {detail}"
+
+    def calendar_event_preview(action: str, event: dict, event_id: str = "") -> dict:
+        public_event = public_calendar_event(event)
+        return {
+            "action": action,
+            "event_id": event_id or public_event.get("id", ""),
+            "summary": public_event.get("summary", "(Untitled event)"),
+            "start": public_event.get("start", {}),
+            "end": public_event.get("end", {}),
+            "location": public_event.get("location", ""),
+            "description": public_event.get("description", ""),
+            "attendees": [item.get("email", "") for item in public_event.get("attendees", [])],
+        }
+
+    def request_calendar_approval(action_type: str, preview: dict) -> str:
+        return request_user_approval_sync(
+            event_queue=event_queue,
+            loop=loop,
+            user_email=user_email,
+            turn_record=turn_record,
+            action_type=action_type,
+            recipient="",
+            preview_data=preview,
+        )
+
+    def get_calendar_events(
+        query: str = "",
+        time_min: str = "",
+        time_max: str = "",
+        max_results: int = 25,
+    ) -> list[dict] | str:
+        """Searches upcoming Google Calendar events and returns IDs, times, guests, and details.
+
+        Args:
+            query: Words to search in event titles, descriptions, or locations.
+            time_min: Optional ISO-8601 start of the search window, including a timezone when available.
+            time_max: Optional ISO-8601 end of the search window, including a timezone when available.
+            max_results: Maximum number of events to return, from 1 to 50.
+        """
+        step_id = str(uuid.uuid4())
+        emit_step(step_id, "running", "Searching Google Calendar", query.strip() or "Upcoming events")
+        try:
+            now = datetime.datetime.now().astimezone()
+            start = parse_calendar_datetime(time_min) if time_min else now
+            end = parse_calendar_datetime(time_max) if time_max else start + datetime.timedelta(days=30)
+            if end <= start:
+                raise HTTPException(status_code=422, detail="Calendar search end must be after its start.")
+            results = calendar_service().events().list(
+                calendarId="primary",
+                timeMin=start.isoformat(),
+                timeMax=end.isoformat(),
+                maxResults=min(max(int(max_results), 1), 50),
+                singleEvents=True,
+                orderBy="startTime",
+                q=query.strip() or None,
+            ).execute()
+        except (HttpError, HTTPException, ValueError) as error:
+            return calendar_tool_error(step_id, "Could not search Google Calendar", error)
+
+        events = []
+        for raw_event in results.get("items", []):
+            item = public_calendar_event(raw_event)
+            item["description"] = item["description"][:1000]
+            item["attendees"] = [attendee["email"] for attendee in item["attendees"]]
+            events.append(item)
+        emit_step(step_id, "completed", f"Found {len(events)} calendar event(s)", query.strip() or "Upcoming events")
+        return events
+
+    def create_calendar_event(
+        summary: str,
+        start: str = "",
+        end: str = "",
+        description: str = "",
+        location: str = "",
+        attendees: Optional[list[str]] = None,
+        all_day: bool = False,
+        start_date: str = "",
+        end_date: str = "",
+        reminder_minutes: Optional[int] = 15,
+        use_default_reminders: bool = False,
+    ) -> str:
+        """Prepares a Google Calendar event; it is created only after the user approves the preview.
+
+        Args:
+            summary: Event title.
+            start: ISO-8601 start time with timezone for a timed event.
+            end: ISO-8601 end time with timezone for a timed event.
+            description: Optional event details.
+            location: Optional location or meeting link.
+            attendees: Guest email addresses to invite.
+            all_day: True for an all-day event.
+            start_date: ISO date for the first day of an all-day event.
+            end_date: ISO date for the inclusive last day of an all-day event.
+            reminder_minutes: Popup reminder minutes before the event; use null for no reminder.
+            use_default_reminders: True to use the user's Calendar defaults.
+        """
+        step_id = str(uuid.uuid4())
+        emit_step(step_id, "running", "Preparing Calendar event for review", summary)
+        try:
+            payload = CalendarEventInput(
+                summary=summary,
+                description=description,
+                location=location,
+                attendees=attendees or [],
+                all_day=all_day,
+                start=parse_calendar_datetime(start) if start else None,
+                end=parse_calendar_datetime(end) if end else None,
+                start_date=parse_calendar_date(start_date) if start_date else None,
+                end_date=parse_calendar_date(end_date) if end_date else None,
+                reminder_minutes=reminder_minutes,
+                use_default_reminders=use_default_reminders,
+            )
+            event_body = calendar_event_body(payload)
+        except (HTTPException, ValueError) as error:
+            return calendar_tool_error(step_id, "Could not prepare Calendar event", error)
+
+        emit_step(step_id, "completed", "Calendar event ready for review", payload.summary.strip())
+        decision = request_calendar_approval(
+            "calendar_create",
+            calendar_event_preview("Create event", event_body),
+        )
+        if decision == "deny":
+            emit_step(str(uuid.uuid4()), "warning", f"Cancelled Calendar event '{payload.summary.strip()}'")
+            return "The user cancelled the Calendar event. It was not created."
+
+        create_step_id = str(uuid.uuid4())
+        emit_step(create_step_id, "running", "Creating Google Calendar event", payload.summary.strip())
+        try:
+            created = calendar_service().events().insert(
+                calendarId="primary",
+                body=event_body,
+                sendUpdates="all",
+            ).execute()
+        except (HttpError, HTTPException) as error:
+            return calendar_tool_error(create_step_id, "Could not create Calendar event", error)
+        created_event = public_calendar_event(created)
+        emit_step(create_step_id, "completed", f"Created Calendar event: {created_event['summary']}")
+        return f"Created Calendar event '{created_event['summary']}' and sent guest invitations."
+
+    def update_calendar_event(
+        event_id: str,
+        summary: Optional[str] = None,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        description: Optional[str] = None,
+        location: Optional[str] = None,
+        attendees: Optional[list[str]] = None,
+        all_day: Optional[bool] = None,
+        reminder_minutes: Optional[int] = None,
+        use_default_reminders: Optional[bool] = None,
+    ) -> str:
+        """Previews changes to an existing event and applies them only after user approval.
+
+        Args:
+            event_id: The ID returned by get_calendar_events; never guess this value.
+            summary: New event title, if changing it.
+            start: New ISO-8601 timed start, if changing it.
+            end: New ISO-8601 timed end, if changing it.
+            start_date: New first day for an all-day event.
+            end_date: New inclusive last day for an all-day event.
+            description: New event details; provide an empty string to clear them.
+            location: New location; provide an empty string to clear it.
+            attendees: Replacement guest email list.
+            all_day: Set only when changing whether this event is all-day.
+            reminder_minutes: New popup reminder; use 0 for at-event or null with use_default_reminders=False for none.
+            use_default_reminders: Set to choose Calendar defaults or custom reminders.
+        """
+        lookup_step_id = str(uuid.uuid4())
+        emit_step(lookup_step_id, "running", "Loading Calendar event to update", event_id)
+        try:
+            service = calendar_service()
+            current_raw = service.events().get(calendarId="primary", eventId=event_id).execute()
+            current = public_calendar_event(current_raw)
+            current_start = current.get("start", {})
+            current_end = current.get("end", {})
+            current_all_day = bool(current_start.get("date"))
+
+            next_reminders = current.get("reminders", {})
+            if use_default_reminders is not None or reminder_minutes is not None:
+                use_defaults = bool(use_default_reminders)
+                next_reminders = (
+                    {"useDefault": True}
+                    if use_defaults
+                    else {
+                        "useDefault": False,
+                        "overrides": (
+                            [{"method": "popup", "minutes": reminder_minutes}]
+                            if reminder_minutes is not None
+                            else []
+                        ),
+                    }
+                )
+
+            next_all_day = current_all_day if all_day is None else all_day
+            schedule_changed = any((start, end, start_date, end_date)) or all_day is not None
+            next_start = current_start
+            next_end = current_end
+            if schedule_changed:
+                if next_all_day:
+                    if not current_all_day and not (start_date and end_date):
+                        raise HTTPException(
+                            status_code=422,
+                            detail="Provide both start_date and end_date when converting to an all-day event.",
+                        )
+                    if current_all_day:
+                        original_start = parse_calendar_date(current_start["date"])
+                        original_end = parse_calendar_date(current_end["date"]) - datetime.timedelta(days=1)
+                        new_start = parse_calendar_date(start_date) if start_date else original_start
+                        new_end = parse_calendar_date(end_date) if end_date else original_end
+                        if start_date and not end_date:
+                            new_end = new_start + (original_end - original_start)
+                    else:
+                        new_start = parse_calendar_date(start_date)
+                        new_end = parse_calendar_date(end_date)
+                    if new_end < new_start:
+                        raise HTTPException(status_code=422, detail="Event end date must be on or after its start date.")
+                    next_start = {"date": new_start.isoformat()}
+                    next_end = {"date": (new_end + datetime.timedelta(days=1)).isoformat()}
+                elif current_all_day:
+                    if not (start and end):
+                        raise HTTPException(
+                            status_code=422,
+                            detail="Provide both start and end times when converting an all-day event.",
+                        )
+                    next_start = {"dateTime": parse_calendar_datetime(start).isoformat()}
+                    next_end = {"dateTime": parse_calendar_datetime(end).isoformat()}
+                elif start or end:
+                    original_start = parse_calendar_datetime(current_start["dateTime"])
+                    original_end = parse_calendar_datetime(current_end["dateTime"])
+                    next_start_time = parse_calendar_datetime(start) if start else original_start
+                    next_end_time = parse_calendar_datetime(end) if end else original_end
+                    if start and not end:
+                        next_end_time = next_start_time + (original_end - original_start)
+                    next_start, next_end = (
+                        {"dateTime": next_start_time.isoformat()},
+                        {"dateTime": next_end_time.isoformat()},
+                    )
+
+            patch = {}
+            if summary is not None:
+                next_summary = summary.strip()
+                if not next_summary or len(next_summary) > 250:
+                    raise HTTPException(status_code=422, detail="Event title must be between 1 and 250 characters.")
+                patch["summary"] = next_summary
+            if description is not None:
+                if len(description) > 8000:
+                    raise HTTPException(status_code=422, detail="Event description cannot exceed 8000 characters.")
+                patch["description"] = description.strip()
+            if location is not None:
+                if len(location) > 500:
+                    raise HTTPException(status_code=422, detail="Event location cannot exceed 500 characters.")
+                patch["location"] = location.strip()
+            if attendees is not None:
+                patch["attendees"] = calendar_attendees(attendees)
+            if schedule_changed:
+                schedule = calendar_event_body(
+                    CalendarEventInput(
+                        summary="Calendar event",
+                        all_day=next_all_day,
+                        start=parse_calendar_datetime(next_start["dateTime"]) if not next_all_day else None,
+                        end=parse_calendar_datetime(next_end["dateTime"]) if not next_all_day else None,
+                        start_date=parse_calendar_date(next_start["date"]) if next_all_day else None,
+                        end_date=(
+                            parse_calendar_date(next_end["date"]) - datetime.timedelta(days=1)
+                            if next_all_day
+                            else None
+                        ),
+                    )
+                )
+                next_start, next_end = schedule["start"], schedule["end"]
+                patch["start"] = next_start
+                patch["end"] = next_end
+            if use_default_reminders is not None or reminder_minutes is not None:
+                if reminder_minutes is not None and not 0 <= reminder_minutes <= 40320:
+                    raise HTTPException(status_code=422, detail="Reminder must be between 0 and 40320 minutes.")
+                patch["reminders"] = next_reminders
+            if not patch:
+                raise HTTPException(status_code=422, detail="Specify at least one Calendar event change.")
+            preview_event = dict(current)
+            preview_event.update(patch)
+            preview_event["reminders"] = next_reminders
+        except (HttpError, HTTPException, ValueError) as error:
+            return calendar_tool_error(lookup_step_id, "Could not prepare Calendar event update", error)
+
+        emit_step(lookup_step_id, "completed", "Calendar event loaded for review", current["summary"])
+        decision = request_calendar_approval(
+            "calendar_update",
+            calendar_event_preview("Update event", preview_event, event_id),
+        )
+        if decision == "deny":
+            emit_step(str(uuid.uuid4()), "warning", f"Cancelled Calendar update for '{current['summary']}'")
+            return "The user cancelled the Calendar update. No changes were made."
+
+        update_step_id = str(uuid.uuid4())
+        emit_step(update_step_id, "running", "Updating Google Calendar event", current["summary"])
+        try:
+            updated = service.events().patch(
+                calendarId="primary",
+                eventId=event_id,
+                body=patch,
+                sendUpdates="all",
+            ).execute()
+        except (HttpError, HTTPException) as error:
+            return calendar_tool_error(update_step_id, "Could not update Calendar event", error)
+        updated_event = public_calendar_event(updated)
+        emit_step(update_step_id, "completed", f"Updated Calendar event: {updated_event['summary']}")
+        return f"Updated Calendar event '{updated_event['summary']}' and notified its guests."
+
+    def delete_calendar_event(event_id: str) -> str:
+        """Cancels an existing Calendar event after showing the user a confirmation preview.
+
+        Args:
+            event_id: The ID returned by get_calendar_events; never guess this value.
+        """
+        lookup_step_id = str(uuid.uuid4())
+        emit_step(lookup_step_id, "running", "Loading Calendar event to cancel", event_id)
+        try:
+            service = calendar_service()
+            current = public_calendar_event(
+                service.events().get(calendarId="primary", eventId=event_id).execute()
+            )
+        except (HttpError, HTTPException) as error:
+            return calendar_tool_error(lookup_step_id, "Could not find Calendar event to cancel", error)
+
+        emit_step(lookup_step_id, "completed", "Calendar event ready for cancellation", current["summary"])
+        decision = request_calendar_approval(
+            "calendar_delete",
+            calendar_event_preview("Cancel event", current, event_id),
+        )
+        if decision == "deny":
+            emit_step(str(uuid.uuid4()), "warning", f"Cancelled request to delete '{current['summary']}'")
+            return "The user cancelled the Calendar cancellation. The event remains scheduled."
+
+        delete_step_id = str(uuid.uuid4())
+        emit_step(delete_step_id, "running", "Cancelling Google Calendar event", current["summary"])
+        try:
+            service.events().delete(
+                calendarId="primary",
+                eventId=event_id,
+                sendUpdates="all",
+            ).execute()
+        except (HttpError, HTTPException) as error:
+            return calendar_tool_error(delete_step_id, "Could not cancel Calendar event", error)
+        emit_step(delete_step_id, "completed", f"Cancelled Calendar event: {current['summary']}")
+        return f"Cancelled Calendar event '{current['summary']}' and notified its guests."
+
+    local_now = datetime.datetime.now().astimezone()
+    today_str = local_now.strftime("%Y/%m/%d")
+    local_timezone = local_now.strftime("%Z (UTC%z)")
     system_prompt = f"""
-    You are D25, a fast, helpful personal AI assistant for {display_name} ({user_email}) modeled after GitHub Copilot. Today's date is {today_str}.
+    You are D25, a fast, helpful personal AI assistant for {display_name} ({user_email}) modeled after GitHub Copilot. Today's local date is {today_str}; the user's local timezone is {local_timezone}.
 
     GMAIL CAPABILITIES & RULES:
 - Use `get_emails` whenever the user asks to read, search, or summarize emails.
@@ -728,6 +1101,14 @@ def run_agent_turn(
 - Keep emails polite, conversational, and concise—stick strictly to the user's points without adding filler unless asked to explain.
 - Use natural contractions (e.g., "I'm", "we'll", "it's") and a natural sentence-case subject line.
 - NEVER use AI clichés ("I hope this email finds you well", "pleased to confirm", "at your earliest convenience") and NEVER add "{display_name}" at the end of `body` (the HTML template adds it automatically).
+
+    GOOGLE CALENDAR CAPABILITIES & RULES:
+- Use `get_calendar_events` to view or search the user's Google Calendar. Search windows use ISO-8601 dates/times; when the user gives a relative date, calculate it from today's local date and timezone.
+- Use `create_calendar_event`, `update_calendar_event`, and `delete_calendar_event` for event changes. For an update or cancellation, first call `get_calendar_events` and use the exact returned event ID; never guess an ID. If multiple events match, ask which one.
+- Before creating, updating, or cancelling an event, show the user the approval card generated by the tool and wait for approval. Never claim a change succeeded unless the tool confirms it.
+- Timed events must use ISO-8601 start/end timestamps in the user's local timezone. All-day events use `start_date` and inclusive `end_date`. Preserve existing event details the user did not ask to change.
+- If a new timed event has a start but no duration, use one hour; if a new all-day event has no end date, use the same date for both. Ask a brief follow-up when the title, date, or start time is unclear.
+- Google Calendar sends guest invitations, updates, or cancellations when the user approves the action.
     """
 
     thinking_step_id = str(uuid.uuid4())
@@ -744,7 +1125,16 @@ def run_agent_turn(
                     history=history,
                     config=types.GenerateContentConfig(
                         system_instruction=system_prompt,
-                        tools=[get_emails, send_email, reply_to_email, modify_emails],
+                        tools=[
+                            get_emails,
+                            send_email,
+                            reply_to_email,
+                            modify_emails,
+                            get_calendar_events,
+                            create_calendar_event,
+                            update_calendar_event,
+                            delete_calendar_event,
+                        ],
                     ),
                 )
                 reply = chat.send_message(user_message)
