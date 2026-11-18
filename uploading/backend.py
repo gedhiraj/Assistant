@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 import html
@@ -6,17 +7,17 @@ import uuid
 import base64
 import asyncio
 import datetime
-import re
+import certifi
 from typing import Optional
 from email.message import EmailMessage
-
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
-from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from pymongo import MongoClient, DESCENDING, ASCENDING
 from pathlib import Path
 
 from google import genai
@@ -31,10 +32,13 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
 TOKEN_FILE = os.getenv("GOOGLE_TOKEN_FILE", "token.json")
-PERMISSIONS_FILE = "permissions.json"
+MONGODB_URI = os.getenv("MONGODB_URI")
+MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "d25_assistant")
 
 if not GEMINI_API_KEY:
     raise ValueError("Missing GEMINI_API_KEY in .env file.")
+if not MONGODB_URI:
+    raise ValueError("Missing MONGODB_URI in .env file.")
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
@@ -52,8 +56,7 @@ FALLBACK_MODELS = [
     "gemini-flash-latest",
 ]
 
-app = FastAPI(title="D25 Assistant Backend")
-
+app = FastAPI(title="d25 Assistant Backend")
 BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
@@ -67,7 +70,27 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# Google Auth & Service Initialization
+# MongoDB Atlas Initialization
+# ---------------------------------------------------------------------------
+MONGO_CLIENT = MongoClient(
+    MONGODB_URI,
+    tls=True,
+    tlsCAFile=certifi.where(),
+    serverSelectionTimeoutMS=15000,
+)
+DB = MONGO_CLIENT[MONGODB_DB_NAME]
+SESSIONS_COL = DB["sessions"]
+MESSAGES_COL = DB["messages"]
+PERMISSIONS_COL = DB["permissions"]
+
+SESSIONS_COL.create_index([("user_email", ASCENDING), ("updated_at", DESCENDING)])
+SESSIONS_COL.create_index("session_id", unique=True)
+MESSAGES_COL.create_index([("session_id", ASCENDING), ("created_at", ASCENDING)])
+PERMISSIONS_COL.create_index("user_email", unique=True)
+
+
+# ---------------------------------------------------------------------------
+# Google Auth & Active User Identity
 # ---------------------------------------------------------------------------
 def get_google_credentials() -> Credentials:
     creds = None
@@ -90,53 +113,51 @@ CREDS = get_google_credentials()
 GMAIL_SERVICE = build("gmail", "v1", credentials=CREDS)
 AI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
 
+# Fetch the authenticated user's primary Gmail address automatically
+PROFILE = GMAIL_SERVICE.users().getProfile(userId="me").execute()
+ACTIVE_USER_EMAIL = PROFILE.get("emailAddress", "default_user@gmail.com").lower()
+
 
 # ---------------------------------------------------------------------------
-# Persistent "Allow Always" Permission Store (Per Recipient)
+# MongoDB-Backed "Allow Always" Permissions (Per User)
 # ---------------------------------------------------------------------------
-def load_permissions() -> dict:
-    if os.path.exists(PERMISSIONS_FILE):
-        try:
-            with open(PERMISSIONS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"allowed_recipients": []}
-
-
-def save_permissions(data: dict) -> None:
-    with open(PERMISSIONS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
-
-def is_recipient_trusted(email_addr: str) -> bool:
-    clean_addr = _extract_raw_email(email_addr)
-    perms = load_permissions()
-    return clean_addr in [e.lower() for e in perms.get("allowed_recipients", [])]
-
-
-def trust_recipient_always(email_addr: str) -> None:
-    clean_addr = _extract_raw_email(email_addr)
-    perms = load_permissions()
-    allowed = [e.lower() for e in perms.get("allowed_recipients", [])]
-    if clean_addr and clean_addr not in allowed:
-        allowed.append(clean_addr)
-        perms["allowed_recipients"] = allowed
-        save_permissions(perms)
-
-
 def _extract_raw_email(header_val: str) -> str:
-    """Extracts 'user@domain.com' from 'Name <user@domain.com>' or returns lowercased string."""
     val = header_val.strip().lower()
     if "<" in val and ">" in val:
         return val.split("<")[-1].split(">")[0].strip()
     return val
 
 
+def load_permissions(user_email: str = ACTIVE_USER_EMAIL) -> dict:
+    doc = PERMISSIONS_COL.find_one({"user_email": user_email}, {"_id": 0})
+    if not doc:
+        return {"user_email": user_email, "allowed_recipients": []}
+    return doc
+
+
+def is_recipient_trusted(recipient_email: str, user_email: str = ACTIVE_USER_EMAIL) -> bool:
+    clean_addr = _extract_raw_email(recipient_email)
+    doc = load_permissions(user_email)
+    return clean_addr in [e.lower() for e in doc.get("allowed_recipients", [])]
+
+
+def trust_recipient_always(recipient_email: str, user_email: str = ACTIVE_USER_EMAIL) -> None:
+    clean_addr = _extract_raw_email(recipient_email)
+    if not clean_addr:
+        return
+    PERMISSIONS_COL.update_one(
+        {"user_email": user_email},
+        {
+            "$addToSet": {"allowed_recipients": clean_addr},
+            "$set": {"updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()},
+        },
+        upsert=True,
+    )
+
+
 # ---------------------------------------------------------------------------
-# Session & Approval State Management
+# Pending Approval State & API Models
 # ---------------------------------------------------------------------------
-SESSIONS: dict[str, list] = {}
 PENDING_APPROVALS: dict[str, dict] = {}
 
 
@@ -153,22 +174,18 @@ class ApprovalDecision(BaseModel):
 # ---------------------------------------------------------------------------
 # Human-Style Editorial HTML Template
 # ---------------------------------------------------------------------------
-
 def _clean_markdown_to_html(text: str) -> str:
-    """Converts basic markdown bold/bullets into clean editorial HTML so raw ** or - never leak into emails."""
     escaped = html.escape(text)
-    # Convert **bold** to <strong>bold</strong>
     escaped = re.sub(r"\*\*(.+?)\*\*", r'<strong style="color: #111827; font-weight: 600;">\1</strong>', escaped)
     return escaped
 
+
 def build_html_email(clean_body: str) -> str:
-    """Clean, native-looking editorial HTML that reads like a genuine 1-to-1 human email."""
     blocks = [b.strip() for b in clean_body.split("\n\n") if b.strip()]
     html_blocks = []
 
     for block in blocks:
         lines = [line.strip() for line in block.split("\n") if line.strip()]
-        # Check if this block is a bullet list
         if all(line.startswith(("- ", "* ")) for line in lines):
             items_html = "".join(
                 f'<li style="margin: 0 0 8px 0; line-height: 1.6; color: #1f2328; font-size: 15px;">'
@@ -183,7 +200,6 @@ def build_html_email(clean_body: str) -> str:
             )
 
     body_html = "".join(html_blocks)
-
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -224,7 +240,7 @@ def _extract_email_body(payload: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# SSE Event Helper & Approval Gate
+# SSE Event Helper & MongoDB-Logged Approval Gate
 # ---------------------------------------------------------------------------
 def format_sse(event_type: str, payload: dict) -> str:
     return f"data: {json.dumps({'type': event_type, **payload})}\n\n"
@@ -233,23 +249,30 @@ def format_sse(event_type: str, payload: dict) -> str:
 def request_user_approval_sync(
     event_queue: asyncio.Queue,
     loop: asyncio.AbstractEventLoop,
+    turn_record: dict,
     action_type: str,
     recipient: str,
     preview_data: dict,
 ) -> str:
-    """Pauses tool execution and streams an approval card to the frontend UI unless recipient is trusted."""
-    if recipient and is_recipient_trusted(recipient):
-        loop.call_soon_threadsafe(
-            event_queue.put_nowait,
-            format_sse(
-                "step",
-                {
-                    "id": str(uuid.uuid4()),
-                    "status": "completed",
-                    "label": f"Auto-approved for trusted recipient ({_extract_raw_email(recipient)})",
-                },
-            ),
-        )
+    """Pauses execution for approval unless recipient is trusted, and logs the approval record to MongoDB."""
+    clean_recip = _extract_raw_email(recipient) if recipient else ""
+
+    if clean_recip and is_recipient_trusted(clean_recip):
+        step_obj = {
+            "id": str(uuid.uuid4()),
+            "status": "completed",
+            "label": f"Auto-approved for trusted recipient ({clean_recip})",
+            "detail": "",
+        }
+        turn_record["steps"].append(step_obj)
+        turn_record["approvals"].append({
+            "approval_id": f"auto-{uuid.uuid4().hex[:8]}",
+            "action_type": action_type,
+            "recipient": clean_recip,
+            "preview": preview_data,
+            "decision": "allow_always (auto)",
+        })
+        loop.call_soon_threadsafe(event_queue.put_nowait, format_sse("step", step_obj))
         return "allow_always"
 
     approval_id = str(uuid.uuid4())
@@ -257,10 +280,9 @@ def request_user_approval_sync(
     PENDING_APPROVALS[approval_id] = {
         "event": decision_event,
         "decision": "deny",
-        "recipient": recipient,
+        "recipient": clean_recip,
     }
 
-    # Emit step + approval prompt to the frontend
     loop.call_soon_threadsafe(
         event_queue.put_nowait,
         format_sse(
@@ -268,27 +290,106 @@ def request_user_approval_sync(
             {
                 "approval_id": approval_id,
                 "action_type": action_type,
-                "recipient": _extract_raw_email(recipient) if recipient else "",
+                "recipient": clean_recip,
                 "preview": preview_data,
             },
         ),
     )
 
-    # Block this worker thread until the user clicks Allow Once / Allow Always / Deny in the UI
     future = asyncio.run_coroutine_threadsafe(decision_event.wait(), loop)
-    future.result(timeout=300)  # 5-minute timeout
+    future.result(timeout=300)
 
     record = PENDING_APPROVALS.pop(approval_id, {})
     decision = record.get("decision", "deny")
 
-    if decision == "allow_always" and recipient:
-        trust_recipient_always(recipient)
+    if decision == "allow_always" and clean_recip:
+        trust_recipient_always(clean_recip)
+
+    turn_record["approvals"].append({
+        "approval_id": approval_id,
+        "action_type": action_type,
+        "recipient": clean_recip,
+        "preview": preview_data,
+        "decision": decision,
+    })
 
     return decision
 
 
 # ---------------------------------------------------------------------------
-# Agent Loop with Live Copilot-Style Step Emission
+# Gemini History Serialization for MongoDB Multi-Turn Continuity
+# ---------------------------------------------------------------------------
+def load_gemini_history_from_db(session_id: str) -> list[types.Content]:
+    doc = SESSIONS_COL.find_one({"session_id": session_id})
+    if not doc or not doc.get("gemini_history"):
+        return []
+    restored = []
+    for item in doc["gemini_history"]:
+        restored.append(
+            types.Content(
+                role=item["role"],
+                parts=[types.Part.from_text(text=item["text"])],
+            )
+        )
+    return restored
+
+
+def save_turn_to_mongodb(
+    session_id: str,
+    user_message: str,
+    assistant_reply: str,
+    turn_record: dict,
+    duration_sec: int,
+):
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    title = user_message[:48] + ("..." if len(user_message) > 48 else "")
+
+    # Upsert session metadata + append clean text turns for multi-turn memory
+    existing = SESSIONS_COL.find_one({"session_id": session_id})
+    if not existing:
+        SESSIONS_COL.insert_one({
+            "session_id": session_id,
+            "user_email": ACTIVE_USER_EMAIL,
+            "title": title,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+            "gemini_history": [
+                {"role": "user", "text": user_message},
+                {"role": "model", "text": assistant_reply},
+            ],
+        })
+    else:
+        SESSIONS_COL.update_one(
+            {"session_id": session_id},
+            {
+                "$set": {"updated_at": now_iso},
+                "$push": {
+                    "gemini_history": {
+                        "$each": [
+                            {"role": "user", "text": user_message},
+                            {"role": "model", "text": assistant_reply},
+                        ]
+                    }
+                },
+            },
+        )
+
+    # Save the full turn (user prompt, steps, approvals, and final response)
+    MESSAGES_COL.insert_one({
+        "message_id": str(uuid.uuid4()),
+        "session_id": session_id,
+        "user_email": ACTIVE_USER_EMAIL,
+        "user_message": user_message,
+        "assistant_reply": assistant_reply,
+        "steps": turn_record["steps"],
+        "approvals": turn_record["approvals"],
+        "duration_sec": duration_sec,
+        "created_at": now_iso,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Agent Loop with Live Copilot-Style Step Emission + MongoDB Logging
 # ---------------------------------------------------------------------------
 def run_agent_turn(
     session_id: str,
@@ -296,21 +397,22 @@ def run_agent_turn(
     event_queue: asyncio.Queue,
     loop: asyncio.AbstractEventLoop,
 ):
-    def emit_step(step_id: str, status: str, label: str, detail: str = ""):
-        loop.call_soon_threadsafe(
-            event_queue.put_nowait,
-            format_sse(
-                "step",
-                {
-                    "id": step_id,
-                    "status": status,  # "running" | "completed" | "warning"
-                    "label": label,
-                    "detail": detail,
-                },
-            ),
-        )
+    start_ts = time.time()
+    turn_record = {"steps": [], "approvals": []}
 
-    # --- Tool 1: Read / Search Primary Inbox (No approval needed) ---
+    def emit_step(step_id: str, status: str, label: str, detail: str = ""):
+        step_obj = {"id": step_id, "status": status, "label": label, "detail": detail}
+        # Update existing step in turn_record or append new one
+        for idx, existing in enumerate(turn_record["steps"]):
+            if existing["id"] == step_id:
+                turn_record["steps"][idx] = step_obj
+                break
+        else:
+            turn_record["steps"].append(step_obj)
+
+        loop.call_soon_threadsafe(event_queue.put_nowait, format_sse("step", step_obj))
+
+    # --- Tool 1: Read / Search Primary Inbox ---
     def get_emails(query: str = "", max_results: int = 5, include_all_categories: bool = False) -> list[dict]:
         """Fetches and reads emails from Gmail, defaulting strictly to the Primary Inbox.
 
@@ -358,7 +460,7 @@ def run_agent_turn(
         emit_step(step_id, "completed", f"Fetched {len(results)} email(s)", "Summarizing contents...")
         return results
 
-    # --- Tool 2: Send New Email (Requires Permission) ---
+    # --- Tool 2: Send New Email ---
     def send_email(to_email: str, subject: str, body: str) -> str:
         """Drafts and sends a new clean HTML + plain-text email via Gmail after permission check.
 
@@ -376,6 +478,7 @@ def run_agent_turn(
         decision = request_user_approval_sync(
             event_queue=event_queue,
             loop=loop,
+            turn_record=turn_record,
             action_type="send_email",
             recipient=to_email,
             preview_data={
@@ -383,13 +486,11 @@ def run_agent_turn(
                 "subject": clean_subject,
                 "body": clean_body,
                 "signature": "Dhiraj Kumar",
-                "html_preview": build_html_email(clean_body),
             },
         )
 
         if decision == "deny":
-            cancel_step_id = str(uuid.uuid4())
-            emit_step(cancel_step_id, "warning", f"Cancelled sending email to {to_email}")
+            emit_step(str(uuid.uuid4()), "warning", f"Cancelled sending email to {to_email}")
             return "User denied permission to send this email."
 
         send_step_id = str(uuid.uuid4())
@@ -398,7 +499,7 @@ def run_agent_turn(
         message = EmailMessage()
         message["To"] = to_email
         message["Subject"] = clean_subject
-        message.set_content(f"{clean_body}\n\nDhiraj Kumar")
+        message.set_content(f"{clean_body.replace('**', '')}\n\nDhiraj Kumar")
         message.add_alternative(build_html_email(clean_body), subtype="html")
 
         encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
@@ -407,7 +508,7 @@ def run_agent_turn(
         emit_step(send_step_id, "completed", f"Sent email to {to_email}", f"Subject: {clean_subject}")
         return f"Email successfully sent to {to_email} with subject '{clean_subject}'."
 
-    # --- Tool 3: Reply Inside Thread (Requires Permission) ---
+    # --- Tool 3: Reply Inside Thread ---
     def reply_to_email(message_id: str, body: str) -> str:
         """Replies directly inside an existing Gmail thread after permission check.
 
@@ -431,6 +532,7 @@ def run_agent_turn(
         decision = request_user_approval_sync(
             event_queue=event_queue,
             loop=loop,
+            turn_record=turn_record,
             action_type="reply_to_email",
             recipient=orig_from,
             preview_data={
@@ -438,7 +540,6 @@ def run_agent_turn(
                 "subject": reply_subject,
                 "body": clean_body,
                 "signature": "Dhiraj Kumar",
-                "html_preview": build_html_email(clean_body),
             },
         )
 
@@ -456,7 +557,7 @@ def run_agent_turn(
             message["In-Reply-To"] = orig_msg_id
             message["References"] = orig_msg_id
 
-        message.set_content(f"{clean_body}\n\nDhiraj Kumar")
+        message.set_content(f"{clean_body.replace('**', '')}\n\nDhiraj Kumar")
         message.add_alternative(build_html_email(clean_body), subtype="html")
 
         encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
@@ -467,7 +568,7 @@ def run_agent_turn(
         emit_step(send_step_id, "completed", f"Sent reply to {orig_from}")
         return f"Reply sent to {orig_from} on thread '{reply_subject}'."
 
-    # --- Tool 4: Modify / Trash / Mark Read (Requires Permission) ---
+    # --- Tool 4: Modify / Trash / Mark Read ---
     def modify_emails(message_ids: list[str], action: str) -> str:
         """Marks emails as read, archives them, or moves them to trash after permission check.
 
@@ -481,8 +582,9 @@ def run_agent_turn(
         decision = request_user_approval_sync(
             event_queue=event_queue,
             loop=loop,
+            turn_record=turn_record,
             action_type="modify_emails",
-            recipient="",  # Always ask before modifying/deleting emails
+            recipient="",
             preview_data={
                 "action": action,
                 "count": len(message_ids),
@@ -514,7 +616,6 @@ def run_agent_turn(
         emit_step(mod_step_id, "completed", f"Completed '{action}' on {len(message_ids)} email(s)")
         return f"Successfully performed '{action}' on {len(message_ids)} email(s)."
 
-    # --- Execute Gemini Agent Loop ---
     today_str = datetime.date.today().strftime("%Y/%m/%d")
     system_prompt = f"""
     You are D25, a fast, helpful personal AI assistant for Dhiraj Kumar modeled after GitHub Copilot. Today's date is {today_str}.
@@ -539,7 +640,7 @@ def run_agent_turn(
     thinking_step_id = str(uuid.uuid4())
     emit_step(thinking_step_id, "running", "Thinking...")
 
-    history = SESSIONS.get(session_id, [])
+    history = load_gemini_history_from_db(session_id)
     last_error = None
 
     try:
@@ -554,12 +655,15 @@ def run_agent_turn(
                     ),
                 )
                 reply = chat.send_message(user_message)
-                SESSIONS[session_id] = chat.get_history()
+                reply_text = reply.text or ""
+                duration_sec = max(1, int(time.time() - start_ts))
 
                 emit_step(thinking_step_id, "completed", "Done")
+                save_turn_to_mongodb(session_id, user_message, reply_text, turn_record, duration_sec)
+
                 loop.call_soon_threadsafe(
                     event_queue.put_nowait,
-                    format_sse("message", {"text": reply.text or ""}),
+                    format_sse("message", {"text": reply_text}),
                 )
                 return
             except Exception as e:
@@ -581,11 +685,17 @@ def run_agent_turn(
 
 
 # ---------------------------------------------------------------------------
-# FastAPI HTTP Endpoints
+# FastAPI Routes (Frontend + Chat + MongoDB History & Permissions)
 # ---------------------------------------------------------------------------
 @app.get("/")
 async def serve_frontend():
-    return FileResponse("index.html")
+    return FileResponse(BASE_DIR / "index.html")
+
+
+@app.get("/api/me")
+async def get_active_user():
+    return {"user_email": ACTIVE_USER_EMAIL, "db_connected": True}
+
 
 @app.post("/api/chat")
 async def chat_stream(req: ChatRequest):
@@ -593,10 +703,7 @@ async def chat_stream(req: ChatRequest):
     event_queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
-    # Emit session_id first so frontend tracks multi-turn history
     await event_queue.put(format_sse("session", {"session_id": session_id}))
-
-    # Run blocking Google API + Gemini tool loop in a background thread
     loop.run_in_executor(None, run_agent_turn, session_id, req.message, event_queue, loop)
 
     async def event_generator():
@@ -623,19 +730,49 @@ async def resolve_approval(body: ApprovalDecision):
     return {"status": "ok", "decision": body.decision}
 
 
+@app.get("/api/sessions")
+async def list_user_sessions():
+    """Returns all saved sessions for the active user from MongoDB."""
+    cursor = SESSIONS_COL.find(
+        {"user_email": ACTIVE_USER_EMAIL},
+        {"_id": 0, "session_id": 1, "title": 1, "updated_at": 1},
+    ).sort("updated_at", DESCENDING).limit(30)
+    return {"sessions": list(cursor)}
+
+
+@app.get("/api/sessions/{session_id}")
+async def get_session_messages(session_id: str):
+    """Loads every turn (prompts, steps, approvals, and replies) for a past session."""
+    session = SESSIONS_COL.find_one({"session_id": session_id, "user_email": ACTIVE_USER_EMAIL}, {"_id": 0, "gemini_history": 0})
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    msgs = list(
+        MESSAGES_COL.find({"session_id": session_id}, {"_id": 0}).sort("created_at", ASCENDING)
+    )
+    return {"session": session, "messages": msgs}
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str):
+    SESSIONS_COL.delete_one({"session_id": session_id, "user_email": ACTIVE_USER_EMAIL})
+    MESSAGES_COL.delete_many({"session_id": session_id, "user_email": ACTIVE_USER_EMAIL})
+    return {"status": "deleted"}
+
+
 @app.get("/api/permissions")
 async def get_permissions():
-    """Returns the list of recipients marked 'Allow Always' so the UI can view or revoke them."""
-    return load_permissions()
+    return load_permissions(ACTIVE_USER_EMAIL)
 
 
 @app.delete("/api/permissions/{recipient_email}")
 async def revoke_permission(recipient_email: str):
-    perms = load_permissions()
     target = recipient_email.strip().lower()
-    perms["allowed_recipients"] = [e for e in perms.get("allowed_recipients", []) if e.lower() != target]
-    save_permissions(perms)
-    return {"status": "revoked", "allowed_recipients": perms["allowed_recipients"]}
+    PERMISSIONS_COL.update_one(
+        {"user_email": ACTIVE_USER_EMAIL},
+        {"$pull": {"allowed_recipients": target}},
+    )
+    return load_permissions(ACTIVE_USER_EMAIL)
 
 
 if __name__ == "__main__":
