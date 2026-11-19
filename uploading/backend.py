@@ -11,7 +11,7 @@ import logging
 import certifi
 import threading
 from functools import wraps
-from typing import Optional
+from typing import Literal, Optional
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid, parseaddr
 from pathlib import Path
@@ -238,6 +238,7 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     turn_id: Optional[str] = None
     message: str
+    mode: Literal["ask", "plan", "act"] = "ask"
 
 
 class ChatStopRequest(BaseModel):
@@ -500,6 +501,8 @@ def save_turn_to_mongodb(
         "user_email": user_email,
         "user_message": user_message,
         "assistant_reply": assistant_reply,
+        "mode": turn_record.get("mode", "ask"),
+        "plan_ready": turn_record.get("plan_ready", False),
         "steps": turn_record["steps"],
         "approvals": turn_record["approvals"],
         "duration_sec": duration_sec,
@@ -528,12 +531,13 @@ def run_agent_turn(
     user_email: str,
     gmail_service,
     user_message: str,
+    mode: str,
     event_queue: asyncio.Queue,
     loop: asyncio.AbstractEventLoop,
     cancellation_event: threading.Event,
 ):
     start_ts = time.time()
-    turn_record = {"steps": [], "approvals": []}
+    turn_record = {"steps": [], "approvals": [], "mode": mode}
     display_name = user_email.split("@")[0].replace(".", " ").title()
     step_start_labels: dict[str, str] = {}
 
@@ -2173,12 +2177,70 @@ def run_agent_turn(
 - Downloads, creates, and edits do not need an approval card. A download link expires after 30 minutes. If the user asks to email the file, use both a Google Sheets link and an attachment; ask for the attachment format if they did not specify one. If they only ask to grant access, send the Google Drive invitation without attaching a file.
 - Do not claim a download, edit, share, or permission change succeeded unless its tool confirms it. Tell the user clearly if an operation partially succeeded.
     """
+    mode_instructions = {
+        "ask": """
+CURRENT MODE: ASK
+- Answer questions and retrieve information when useful.
+- This mode is read-only. Do not send, reply to, modify, share, create, or delete anything.
+- If the user asks for an action, explain that they can switch to Act mode.
+""",
+        "plan": """
+CURRENT MODE: PLAN
+- Do not perform any changes. You may use read-only tools to ground the plan in the user's data.
+- Break the request into actionable steps and identify the Google services required.
+- If key information is missing, ask concise clarifying questions and do not mark the plan ready.
+- When a complete plan is ready for user approval, end with the exact marker [[D25_PLAN_READY]] on its own final line.
+- Do not include that marker when asking questions or when no actionable plan is proposed.
+""",
+        "act": """
+CURRENT MODE: ACT
+- Carry out the user's requested or explicitly approved workflow using the available tools.
+- When continuing a plan, follow the approved steps exactly and do not add unrelated actions.
+- Existing action-specific approval cards are still required; plan approval does not replace them.
+- Report results only when confirmed by the corresponding tool.
+""",
+    }[mode]
+    system_prompt += "\n\n" + mode_instructions
 
     thinking_step_id = str(uuid.uuid4())
     emit_step(thinking_step_id, "running", "Thinking...")
 
     history = load_gemini_history_from_db(session_id, user_email)
     last_error = None
+
+    all_tools = [
+        get_emails,
+        send_email,
+        reply_to_email,
+        modify_emails,
+        get_calendar_events,
+        create_calendar_event,
+        update_calendar_event,
+        delete_calendar_event,
+        find_spreadsheets,
+        get_spreadsheet_info,
+        read_spreadsheet_range,
+        create_spreadsheet,
+        write_sheet_range,
+        manage_sheet_tabs,
+        format_spreadsheet,
+        sort_sheet_range,
+        set_sheet_filter,
+        create_sheet_chart,
+        download_spreadsheet,
+        share_spreadsheet,
+        list_spreadsheet_permissions,
+        manage_spreadsheet_permission,
+    ]
+    read_only_tools = [
+        get_emails,
+        get_calendar_events,
+        find_spreadsheets,
+        get_spreadsheet_info,
+        read_spreadsheet_range,
+        list_spreadsheet_permissions,
+    ]
+    available_tools = all_tools if mode == "act" else read_only_tools
 
     try:
         for model_name in FALLBACK_MODELS:
@@ -2191,33 +2253,7 @@ def run_agent_turn(
                     history=history,
                     config=types.GenerateContentConfig(
                         system_instruction=system_prompt,
-                        tools=[
-                            cancellable_tool(tool)
-                            for tool in [
-                                get_emails,
-                                send_email,
-                                reply_to_email,
-                                modify_emails,
-                                get_calendar_events,
-                                create_calendar_event,
-                                update_calendar_event,
-                                delete_calendar_event,
-                                find_spreadsheets,
-                                get_spreadsheet_info,
-                                read_spreadsheet_range,
-                                create_spreadsheet,
-                                write_sheet_range,
-                                manage_sheet_tabs,
-                                format_spreadsheet,
-                                sort_sheet_range,
-                                set_sheet_filter,
-                                create_sheet_chart,
-                                download_spreadsheet,
-                                share_spreadsheet,
-                                list_spreadsheet_permissions,
-                                manage_spreadsheet_permission,
-                            ]
-                        ],
+                        tools=[cancellable_tool(tool) for tool in available_tools],
                     ),
                 )
                 reply_text = ""
@@ -2238,6 +2274,10 @@ def run_agent_turn(
                     emit_step(thinking_step_id, "completed", "Stopped")
                     return
                 duration_sec = max(1, int(time.time() - start_ts))
+                plan_ready = mode == "plan" and "[[D25_PLAN_READY]]" in reply_text
+                if mode == "plan":
+                    reply_text = reply_text.replace("[[D25_PLAN_READY]]", "").rstrip()
+                turn_record["plan_ready"] = plan_ready
 
                 emit_step(thinking_step_id, "completed", "Done")
                 save_turn_to_mongodb(session_id, user_email, user_message, reply_text, turn_record, duration_sec)
@@ -2247,7 +2287,7 @@ def run_agent_turn(
 
                 loop.call_soon_threadsafe(
                     event_queue.put_nowait,
-                    format_sse("message", {"text": reply_text}),
+                    format_sse("message", {"text": reply_text, "plan_ready": plan_ready}),
                 )
                 return
             except Exception as e:
@@ -2281,6 +2321,7 @@ def run_registered_chat_turn(
     user_email: str,
     gmail_service,
     user_message: str,
+    mode: str,
     event_queue: asyncio.Queue,
     loop: asyncio.AbstractEventLoop,
     cancellation_event: threading.Event,
@@ -2291,6 +2332,7 @@ def run_registered_chat_turn(
             user_email,
             gmail_service,
             user_message,
+            mode,
             event_queue,
             loop,
             cancellation_event,
@@ -2449,6 +2491,7 @@ async def chat_stream(req: ChatRequest):
         user_email,
         gmail_service,
         req.message,
+        req.mode,
         event_queue,
         loop,
         cancellation_event,

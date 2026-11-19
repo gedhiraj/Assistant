@@ -165,11 +165,13 @@ The inspiration comes from interaction patterns found in AI assistants such as G
 
 ### 5.1 Ask / Plan / Act Modes
 
-Introduce three interaction modes.
+**Status: Implemented**
+
+D25 provides three modes in the chat composer. New chats default to Ask.
 
 **ASK MODE**
 
-For information retrieval and general questions.
+For general questions and information retrieval. Ask is read-only: it can search Gmail, Calendar, and Sheets, but cannot make changes.
 
 Examples:
 - "What meetings do I have tomorrow?"
@@ -178,7 +180,7 @@ Examples:
 
 **PLAN MODE**
 
-For planning complex operations before execution.
+For planning complex operations before execution. Plan may use read-only tools to ground recommendations in the user's data, but cannot make changes.
 
 Examples:
 - "Organize my schedule for next week."
@@ -189,12 +191,14 @@ The assistant should:
 1. Understand the request.
 2. Break it into actionable steps.
 3. Identify the required Google services.
-4. Present a proposed execution plan.
-5. Wait for user confirmation where necessary.
+4. Ask clarifying questions if key details are missing.
+5. Present a proposed execution plan and an **Approve plan & run in Act mode** button when ready.
+
+Approving the plan switches the chat to Act and submits an explicit confirmation. Existing action-specific approval cards still apply.
 
 **ACT MODE**
 
-For executing approved workflows.
+For executing requested or approved workflows. Act has access to the full toolset and reports results only after tools confirm them. Existing approval cards remain required for protected actions.
 
 Examples:
 - "Create calendar events based on these emails."
@@ -314,7 +318,7 @@ Planned functionality:
 | 3 | Google Sheets Integration | Implemented |
 | 4 | Approval-Based Actions | Implemented |
 | 5 | Chat Session Management | Implemented |
-| 6 | Ask / Plan / Act Modes | Planned |
+| 6 | Ask / Plan / Act Modes | Implemented |
 | 7 | Functional Context Mentions | Planned |
 | 8 | Source Cards | Planned |
 | 9 | Google Tasks Integration | Planned |
