@@ -7,8 +7,10 @@ import uuid
 import base64
 import asyncio
 import datetime
+import logging
 import certifi
 import threading
+from functools import wraps
 from typing import Optional
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid, parseaddr
@@ -80,6 +82,7 @@ FALLBACK_MODELS = [
 ]
 
 app = FastAPI(title="d25 Assistant Backend")
+LOGGER = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 TOKENS_DIR = BASE_DIR / "tokens"
 ACTIVE_USER_FILE = TOKENS_DIR / "active_user.json"
@@ -221,6 +224,8 @@ def trust_recipient_always(recipient_email: str, user_email: str) -> None:
 # Pending Approval State & API Models
 # ---------------------------------------------------------------------------
 PENDING_APPROVALS: dict[str, dict] = {}
+ACTIVE_CHAT_TURNS: dict[str, dict] = {}
+ACTIVE_CHAT_TURNS_LOCK = threading.Lock()
 SHEETS_DOWNLOADS: dict[str, dict] = {}
 SHEETS_DOWNLOAD_LOCK = threading.Lock()
 SHEETS_DOWNLOAD_TTL_SECONDS = 1800
@@ -231,7 +236,12 @@ MAX_SHEETS_DOWNLOAD_STORAGE_BYTES = 80 * 1024 * 1024
 
 class ChatRequest(BaseModel):
     session_id: Optional[str] = None
+    turn_id: Optional[str] = None
     message: str
+
+
+class ChatStopRequest(BaseModel):
+    turn_id: str
 
 
 class ApprovalEdits(BaseModel):
@@ -341,8 +351,11 @@ def request_user_approval_sync(
     action_type: str,
     recipient: str,
     preview_data: dict,
+    cancellation_event: Optional[threading.Event] = None,
 ) -> str:
     """Pauses execution for approval unless recipient is trusted, and logs the approval record to MongoDB."""
+    if cancellation_event and cancellation_event.is_set():
+        return "deny"
     clean_recip = _extract_raw_email(recipient) if recipient else ""
 
     if clean_recip and is_recipient_trusted(clean_recip, user_email):
@@ -387,7 +400,23 @@ def request_user_approval_sync(
     )
 
     future = asyncio.run_coroutine_threadsafe(decision_event.wait(), loop)
-    future.result(timeout=300)
+    while True:
+        if cancellation_event and cancellation_event.is_set():
+            future.cancel()
+            PENDING_APPROVALS.pop(approval_id, None)
+            turn_record["approvals"].append({
+                "approval_id": approval_id,
+                "action_type": action_type,
+                "recipient": clean_recip,
+                "preview": preview_data,
+                "decision": "cancelled",
+            })
+            return "deny"
+        try:
+            future.result(timeout=0.1)
+            break
+        except TimeoutError:
+            continue
 
     record = PENDING_APPROVALS.pop(approval_id, {})
     decision = record.get("decision", "deny")
@@ -478,6 +507,19 @@ def save_turn_to_mongodb(
     })
 
 
+_STANDALONE_GREETING = re.compile(
+    r"(?:hi|hello|hey|hiya|howdy|good\s+(?:morning|afternoon|evening))"
+    r"(?:[,\s]+(?:there|d25|assistant))?[!?.\s]*",
+    re.IGNORECASE,
+)
+
+
+def _quick_greeting_reply(user_message: str) -> Optional[str]:
+    if _STANDALONE_GREETING.fullmatch(user_message.strip()):
+        return "Hello! How can I help with your emails, calendar, or spreadsheets today?"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Agent Loop with Live Copilot-Style Step Emission + MongoDB Logging
 # ---------------------------------------------------------------------------
@@ -488,6 +530,7 @@ def run_agent_turn(
     user_message: str,
     event_queue: asyncio.Queue,
     loop: asyncio.AbstractEventLoop,
+    cancellation_event: threading.Event,
 ):
     start_ts = time.time()
     turn_record = {"steps": [], "approvals": []}
@@ -510,6 +553,39 @@ def run_agent_turn(
             turn_record["steps"].append(step_obj)
 
         loop.call_soon_threadsafe(event_queue.put_nowait, format_sse("step", step_obj))
+
+    quick_reply = _quick_greeting_reply(user_message)
+    if quick_reply is not None:
+        greeting_step_id = str(uuid.uuid4())
+        emit_step(greeting_step_id, "running", "Thinking...")
+        emit_step(greeting_step_id, "completed", "Done")
+        duration_sec = max(1, int(time.time() - start_ts))
+        save_future = loop.run_in_executor(
+            None,
+            save_turn_to_mongodb,
+            session_id,
+            user_email,
+            user_message,
+            quick_reply,
+            turn_record,
+            duration_sec,
+        )
+
+        def log_save_failure(future):
+            error = future.exception()
+            if error is not None:
+                LOGGER.error(
+                    "Could not save quick greeting to conversation history.",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+        save_future.add_done_callback(log_save_failure)
+        loop.call_soon_threadsafe(
+            event_queue.put_nowait,
+            format_sse("message", {"text": quick_reply}),
+        )
+        loop.call_soon_threadsafe(event_queue.put_nowait, format_sse("done", {}))
+        return
 
     # --- Tool 1: Read / Search Primary Inbox ---
     def get_emails(query: str = "", max_results: int = 5, include_all_categories: bool = False) -> list[dict]:
@@ -588,9 +664,10 @@ def run_agent_turn(
             action_type="send_email",
             recipient=to_email,
             preview_data=preview_data,
+            cancellation_event=cancellation_event,
         )
 
-        if decision == "deny":
+        if decision == "deny" or cancellation_event.is_set():
             emit_step(str(uuid.uuid4()), "warning", f"Cancelled sending email to {to_email}")
             return "User denied permission to send this email."
 
@@ -653,9 +730,10 @@ def run_agent_turn(
             action_type="reply_to_email",
             recipient=orig_from,
             preview_data=preview_data,
+            cancellation_event=cancellation_event,
         )
 
-        if decision == "deny":
+        if decision == "deny" or cancellation_event.is_set():
             emit_step(str(uuid.uuid4()), "warning", f"Cancelled reply to {orig_from}")
             return "User denied permission to send this reply."
 
@@ -711,9 +789,10 @@ def run_agent_turn(
                 "count": len(message_ids),
                 "message_ids": message_ids,
             },
+            cancellation_event=cancellation_event,
         )
 
-        if decision == "deny":
+        if decision == "deny" or cancellation_event.is_set():
             emit_step(str(uuid.uuid4()), "warning", f"Cancelled '{action}' on {len(message_ids)} email(s)")
             return f"User denied permission to {action} emails."
 
@@ -771,6 +850,7 @@ def run_agent_turn(
             action_type=action_type,
             recipient="",
             preview_data=preview,
+            cancellation_event=cancellation_event,
         )
 
     def get_calendar_events(
@@ -869,7 +949,7 @@ def run_agent_turn(
             "calendar_create",
             calendar_event_preview("Create event", event_body),
         )
-        if decision == "deny":
+        if decision == "deny" or cancellation_event.is_set():
             emit_step(str(uuid.uuid4()), "warning", f"Cancelled Calendar event '{payload.summary.strip()}'")
             return "The user cancelled the Calendar event. It was not created."
 
@@ -1039,7 +1119,7 @@ def run_agent_turn(
             "calendar_update",
             calendar_event_preview("Update event", preview_event, event_id),
         )
-        if decision == "deny":
+        if decision == "deny" or cancellation_event.is_set():
             emit_step(str(uuid.uuid4()), "warning", f"Cancelled Calendar update for '{current['summary']}'")
             return "The user cancelled the Calendar update. No changes were made."
 
@@ -1079,7 +1159,7 @@ def run_agent_turn(
             "calendar_delete",
             calendar_event_preview("Cancel event", current, event_id),
         )
-        if decision == "deny":
+        if decision == "deny" or cancellation_event.is_set():
             emit_step(str(uuid.uuid4()), "warning", f"Cancelled request to delete '{current['summary']}'")
             return "The user cancelled the Calendar cancellation. The event remains scheduled."
 
@@ -1235,6 +1315,7 @@ def run_agent_turn(
             action_type=action_type,
             recipient="",
             preview_data=preview,
+            cancellation_event=cancellation_event,
         )
 
     def find_spreadsheets(query: str = "", max_results: int = 10) -> list[dict] | str:
@@ -1841,7 +1922,7 @@ def run_agent_turn(
             "attachment_format": attachment_format.upper() if needs_attachment else "",
         }
         decision = request_sheets_approval("sheets_share", preview)
-        if decision == "deny":
+        if decision == "deny" or cancellation_event.is_set():
             emit_step(str(uuid.uuid4()), "warning", f"Cancelled sharing '{title}'")
             return "The user cancelled spreadsheet sharing. No permissions were changed."
 
@@ -1978,7 +2059,7 @@ def run_agent_turn(
             "role": next_role,
         }
         decision = request_sheets_approval("sheets_permission", preview)
-        if decision == "deny":
+        if decision == "deny" or cancellation_event.is_set():
             emit_step(str(uuid.uuid4()), "warning", f"Cancelled permission change for {email}")
             return "The user cancelled the permission change. No access was changed."
 
@@ -2004,11 +2085,25 @@ def run_agent_turn(
         emit_step(change_step_id, "completed", f"Spreadsheet permission {action} completed", email)
         return f"Spreadsheet permission {action} completed for {email}."
 
+    def cancellable_tool(tool):
+        @wraps(tool)
+        def guarded_tool(*args, **kwargs):
+            if cancellation_event.is_set():
+                return "The user stopped this response. Do not perform any further actions."
+            return tool(*args, **kwargs)
+
+        return guarded_tool
+
     local_now = datetime.datetime.now().astimezone()
     today_str = local_now.strftime("%Y/%m/%d")
     local_timezone = local_now.strftime("%Z (UTC%z)")
     system_prompt = f"""
     You are D25, a fast, helpful personal AI assistant for {display_name} ({user_email}) modeled after GitHub Copilot. Today's local date is {today_str}; the user's local timezone is {local_timezone}.
+
+    SCOPE & OUT-OF-SCOPE REQUESTS:
+- Your connected actions are limited to Gmail, Google Calendar, and Google Sheets as described below. Do not imply you can access or take actions in other apps or services.
+- If a request is unrelated to these capabilities, politely say it is outside what you can help with here, briefly mention the relevant Gmail, Calendar, or Sheets tasks you can do, and invite the user to choose one. Keep the redirect concise and natural; do not call tools for unrelated requests.
+- Answer brief greetings and conversational acknowledgments naturally without showing the capability list. If an unrelated question has a useful connection to email, scheduling, or spreadsheets, offer that specific related help instead of a generic list.
 
     GMAIL CAPABILITIES & RULES:
 - Use `get_emails` whenever the user asks to read, search, or summarize emails.
@@ -2052,38 +2147,47 @@ def run_agent_turn(
     try:
         for model_name in FALLBACK_MODELS:
             try:
+                if cancellation_event.is_set():
+                    emit_step(thinking_step_id, "completed", "Stopped")
+                    return
                 chat = AI_CLIENT.chats.create(
                     model=model_name,
                     history=history,
                     config=types.GenerateContentConfig(
                         system_instruction=system_prompt,
                         tools=[
-                            get_emails,
-                            send_email,
-                            reply_to_email,
-                            modify_emails,
-                            get_calendar_events,
-                            create_calendar_event,
-                            update_calendar_event,
-                            delete_calendar_event,
-                            find_spreadsheets,
-                            get_spreadsheet_info,
-                            read_spreadsheet_range,
-                            create_spreadsheet,
-                            write_sheet_range,
-                            manage_sheet_tabs,
-                            format_spreadsheet,
-                            sort_sheet_range,
-                            set_sheet_filter,
-                            create_sheet_chart,
-                            download_spreadsheet,
-                            share_spreadsheet,
-                            list_spreadsheet_permissions,
-                            manage_spreadsheet_permission,
+                            cancellable_tool(tool)
+                            for tool in [
+                                get_emails,
+                                send_email,
+                                reply_to_email,
+                                modify_emails,
+                                get_calendar_events,
+                                create_calendar_event,
+                                update_calendar_event,
+                                delete_calendar_event,
+                                find_spreadsheets,
+                                get_spreadsheet_info,
+                                read_spreadsheet_range,
+                                create_spreadsheet,
+                                write_sheet_range,
+                                manage_sheet_tabs,
+                                format_spreadsheet,
+                                sort_sheet_range,
+                                set_sheet_filter,
+                                create_sheet_chart,
+                                download_spreadsheet,
+                                share_spreadsheet,
+                                list_spreadsheet_permissions,
+                                manage_spreadsheet_permission,
+                            ]
                         ],
                     ),
                 )
                 reply = chat.send_message(user_message)
+                if cancellation_event.is_set():
+                    emit_step(thinking_step_id, "completed", "Stopped")
+                    return
                 reply_text = reply.text or ""
                 duration_sec = max(1, int(time.time() - start_ts))
 
@@ -2111,6 +2215,40 @@ def run_agent_turn(
         )
     finally:
         loop.call_soon_threadsafe(event_queue.put_nowait, format_sse("done", {}))
+
+
+def run_registered_chat_turn(
+    turn_id: str,
+    session_id: str,
+    user_email: str,
+    gmail_service,
+    user_message: str,
+    event_queue: asyncio.Queue,
+    loop: asyncio.AbstractEventLoop,
+    cancellation_event: threading.Event,
+) -> None:
+    try:
+        run_agent_turn(
+            session_id,
+            user_email,
+            gmail_service,
+            user_message,
+            event_queue,
+            loop,
+            cancellation_event,
+        )
+    except Exception as error:
+        LOGGER.exception("Chat turn failed before completion.")
+        loop.call_soon_threadsafe(
+            event_queue.put_nowait,
+            format_sse("error", {"message": str(error)}),
+        )
+        loop.call_soon_threadsafe(event_queue.put_nowait, format_sse("done", {}))
+    finally:
+        with ACTIVE_CHAT_TURNS_LOCK:
+            record = ACTIVE_CHAT_TURNS.get(turn_id)
+            if record and record["cancellation_event"] is cancellation_event:
+                ACTIVE_CHAT_TURNS.pop(turn_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -2230,11 +2368,33 @@ async def download_sheet_export(download_id: str):
 async def chat_stream(req: ChatRequest):
     user_email, gmail_service = require_gmail_service()
     session_id = req.session_id or str(uuid.uuid4())
+    turn_id = req.turn_id or str(uuid.uuid4())
+    cancellation_event = threading.Event()
     event_queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
+    with ACTIVE_CHAT_TURNS_LOCK:
+        if turn_id in ACTIVE_CHAT_TURNS:
+            raise HTTPException(status_code=409, detail="This chat turn is already running.")
+        ACTIVE_CHAT_TURNS[turn_id] = {
+            "user_email": user_email.lower(),
+            "session_id": session_id,
+            "cancellation_event": cancellation_event,
+        }
+
     await event_queue.put(format_sse("session", {"session_id": session_id}))
-    loop.run_in_executor(None, run_agent_turn, session_id, user_email, gmail_service, req.message, event_queue, loop)
+    loop.run_in_executor(
+        None,
+        run_registered_chat_turn,
+        turn_id,
+        session_id,
+        user_email,
+        gmail_service,
+        req.message,
+        event_queue,
+        loop,
+        cancellation_event,
+    )
 
     async def event_generator():
         while True:
@@ -2244,6 +2404,17 @@ async def chat_stream(req: ChatRequest):
                 break
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.post("/api/chat/stop")
+async def stop_chat_turn(req: ChatStopRequest):
+    user_email, _ = require_gmail_service()
+    with ACTIVE_CHAT_TURNS_LOCK:
+        record = ACTIVE_CHAT_TURNS.get(req.turn_id)
+        if not record or record["user_email"] != user_email.lower():
+            raise HTTPException(status_code=404, detail="This chat response is no longer running.")
+        record["cancellation_event"].set()
+    return {"stopped": True}
 
 
 @app.post("/api/approve")

@@ -153,6 +153,11 @@
       overflow-wrap: anywhere;
       box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
     }
+    #sendBtn.is-stop {
+      background: #da3633;
+      color: #ffffff;
+    }
+    #sendBtn.is-stop:hover { background: #f85149; }
 
     .activity-list {
       display: flex;
@@ -657,8 +662,9 @@
 
               <button
                 id="sendBtn"
-                onclick="sendMessage()"
+                onclick="handleSendAction()"
                 title="Send prompt"
+                aria-label="Send prompt"
                 class="w-7 h-7 rounded-md bg-[#2a2a2a] hover:bg-[#3a3a3a] disabled:opacity-40 text-[#ececec] flex items-center justify-center transition"
               >
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -756,8 +762,78 @@
     const API_BASE = "http://127.0.0.1:8000";
     let sessionId = null;
     let isStreaming = false;
+    let activeTurnId = null;
+    let activeAbortController = null;
+    let activeTurnElement = null;
     let turnStartTime = null;
     let timerInterval = null;
+
+    function setStopButton(isStopping) {
+      const button = document.getElementById("sendBtn");
+      button.innerHTML = isStopping
+        ? '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg>'
+        : '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.47 7.78a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0l4.25 4.25a.751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018L9 4.81v7.44a.75.75 0 0 1-1.5 0V4.81L4.53 7.78a.75.75 0 0 1-1.06 0Z"/></svg>';
+      button.title = isStopping ? "Stop response" : "Send prompt";
+      button.setAttribute("aria-label", button.title);
+      button.classList.toggle("is-stop", isStopping);
+      button.disabled = false;
+    }
+
+    function handleSendAction() {
+      if (isStreaming) {
+        stopResponse();
+      } else {
+        sendMessage();
+      }
+    }
+
+    async function stopResponse() {
+      if (!isStreaming || !activeTurnId || !activeAbortController) return;
+
+      const turnId = activeTurnId;
+      const controller = activeAbortController;
+      const turnEl = activeTurnElement;
+      const button = document.getElementById("sendBtn");
+      button.disabled = true;
+      button.title = "Stopping response...";
+      button.setAttribute("aria-label", button.title);
+
+      try {
+        const response = await fetch(`${API_BASE}/api/chat/stop`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ turn_id: turnId }),
+        });
+        if (response.status === 404) {
+          setStopButton(true);
+          return;
+        }
+        if (!response.ok) {
+          let detail = `Stop request failed (${response.status}).`;
+          try {
+            const result = await response.json();
+            detail = result.detail || detail;
+          } catch (_) {}
+          throw new Error(detail);
+        }
+
+        if (turnEl) {
+          const approvals = turnEl.querySelector(".approvals-slot");
+          if (approvals) approvals.innerHTML = "";
+          const replySlot = turnEl.querySelector(".reply-slot");
+          replySlot.classList.remove("hidden");
+          replySlot.innerHTML = '<div class="text-xs text-[#8a8a8a]">Stopped. Any action already in progress may still finish.</div>';
+        }
+        controller.abort();
+      } catch (error) {
+        setStopButton(true);
+        if (turnEl) {
+          const replySlot = turnEl.querySelector(".reply-slot");
+          replySlot.classList.remove("hidden");
+          replySlot.innerHTML = `<div class="text-xs text-[#ff7b72]">${escapeHtml(error.message)}</div>`;
+        }
+      }
+    }
 
     function syncSidebarControl() {
       const sidebar = document.getElementById("sidebar");
@@ -1628,16 +1704,22 @@
       input.value = "";
       autoResize(input);
       isStreaming = true;
-      document.getElementById("sendBtn").disabled = true;
+      activeTurnId = window.crypto?.randomUUID
+        ? window.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      activeAbortController = new AbortController();
+      setStopButton(true);
 
       appendUserMessage(text, !sessionId);
       const turnEl = createAssistantTurn();
+      activeTurnElement = turnEl;
 
       try {
         const response = await fetch(`${API_BASE}/api/chat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId, message: text }),
+          body: JSON.stringify({ session_id: sessionId, turn_id: activeTurnId, message: text }),
+          signal: activeAbortController.signal,
         });
 
         if (response.status === 401) {
@@ -1682,13 +1764,18 @@
           }
         }
       } catch (err) {
-        const replySlot = turnEl.querySelector(".reply-slot");
-        replySlot.classList.remove("hidden");
-        replySlot.innerHTML = `<div class="p-3 rounded-lg bg-[#da3633]/10 border border-[#f85149]/40 text-xs text-[#ff7b72]">Backend connection error: ${escapeHtml(err.message)}</div>`;
+        if (err.name !== "AbortError") {
+          const replySlot = turnEl.querySelector(".reply-slot");
+          replySlot.classList.remove("hidden");
+          replySlot.innerHTML = `<div class="p-3 rounded-lg bg-[#da3633]/10 border border-[#f85149]/40 text-xs text-[#ff7b72]">Backend connection error: ${escapeHtml(err.message)}</div>`;
+        }
       } finally {
         finishTurnTimer(turnEl);
         isStreaming = false;
-        document.getElementById("sendBtn").disabled = false;
+        setStopButton(false);
+        activeTurnId = null;
+        activeAbortController = null;
+        activeTurnElement = null;
         await loadSavedSessions();
         input.focus();
       }
