@@ -822,7 +822,7 @@
           if (approvals) approvals.innerHTML = "";
           const replySlot = turnEl.querySelector(".reply-slot");
           replySlot.classList.remove("hidden");
-          replySlot.innerHTML = '<div class="text-xs text-[#8a8a8a]">Stopped. Any action already in progress may still finish.</div>';
+          replySlot.innerHTML = '<div class="text-xs text-[#8a8a8a]">Stop requested.</div>';
         }
         controller.abort();
       } catch (error) {
@@ -1713,6 +1713,7 @@
       appendUserMessage(text, !sessionId);
       const turnEl = createAssistantTurn();
       activeTurnElement = turnEl;
+      let streamedReply = "";
 
       try {
         const response = await fetch(`${API_BASE}/api/chat`, {
@@ -1750,10 +1751,22 @@
               if (isCompletedSendStep(payload)) closeInspector();
             } else if (payload.type === "approval_required") {
               renderApprovalCard(turnEl, payload);
+            } else if (payload.type === "message_delta") {
+              const replySlot = turnEl.querySelector(".reply-slot");
+              streamedReply += payload.text || "";
+              replySlot.classList.remove("hidden");
+              replySlot.innerHTML = renderChatMarkdown(streamedReply);
+              scrollToBottom();
+            } else if (payload.type === "message_reset") {
+              const replySlot = turnEl.querySelector(".reply-slot");
+              streamedReply = "";
+              replySlot.classList.remove("hidden");
+              replySlot.innerHTML = "";
             } else if (payload.type === "message") {
               const replySlot = turnEl.querySelector(".reply-slot");
               replySlot.classList.remove("hidden");
-              replySlot.innerHTML = renderChatMarkdown(payload.text || "");
+              streamedReply = payload.text || streamedReply;
+              replySlot.innerHTML = renderChatMarkdown(streamedReply);
               scrollToBottom();
             } else if (payload.type === "error") {
               const replySlot = turnEl.querySelector(".reply-slot");

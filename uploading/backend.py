@@ -554,12 +554,25 @@ def run_agent_turn(
 
         loop.call_soon_threadsafe(event_queue.put_nowait, format_sse("step", step_obj))
 
+    class TurnCancelled(Exception):
+        pass
+
+    def ensure_turn_active():
+        if cancellation_event.is_set():
+            raise TurnCancelled()
+
     quick_reply = _quick_greeting_reply(user_message)
     if quick_reply is not None:
+        if cancellation_event.is_set():
+            loop.call_soon_threadsafe(event_queue.put_nowait, format_sse("done", {}))
+            return
         greeting_step_id = str(uuid.uuid4())
         emit_step(greeting_step_id, "running", "Thinking...")
         emit_step(greeting_step_id, "completed", "Done")
         duration_sec = max(1, int(time.time() - start_ts))
+        if cancellation_event.is_set():
+            loop.call_soon_threadsafe(event_queue.put_nowait, format_sse("done", {}))
+            return
         save_future = loop.run_in_executor(
             None,
             save_turn_to_mongodb,
@@ -690,6 +703,7 @@ def run_agent_turn(
         message.add_alternative(build_html_email(clean_body, signature), subtype="html")
 
         encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+        ensure_turn_active()
         gmail_service.users().messages().send(userId="me", body={"raw": encoded_message}).execute()
 
         emit_step(send_step_id, "completed", f"Sent email to {to_email}", f"Subject: {clean_subject}")
@@ -759,6 +773,7 @@ def run_agent_turn(
         message.add_alternative(build_html_email(clean_body, signature), subtype="html")
 
         encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+        ensure_turn_active()
         gmail_service.users().messages().send(
             userId="me", body={"raw": encoded_message, "threadId": thread_id}
         ).execute()
@@ -800,15 +815,18 @@ def run_agent_turn(
         emit_step(mod_step_id, "running", f"Applying '{action}' to {len(message_ids)} email(s)...")
 
         if action == "mark_read":
+            ensure_turn_active()
             gmail_service.users().messages().batchModify(
                 userId="me", body={"ids": message_ids, "removeLabelIds": ["UNREAD"]}
             ).execute()
         elif action == "archive":
+            ensure_turn_active()
             gmail_service.users().messages().batchModify(
                 userId="me", body={"ids": message_ids, "removeLabelIds": ["INBOX"]}
             ).execute()
         elif action == "trash":
             for mid in message_ids:
+                ensure_turn_active()
                 gmail_service.users().messages().trash(userId="me", id=mid).execute()
         else:
             return f"Unsupported action: {action}"
@@ -956,6 +974,7 @@ def run_agent_turn(
         create_step_id = str(uuid.uuid4())
         emit_step(create_step_id, "running", "Creating Google Calendar event", payload.summary.strip())
         try:
+            ensure_turn_active()
             created = calendar_service().events().insert(
                 calendarId="primary",
                 body=event_body,
@@ -1126,6 +1145,7 @@ def run_agent_turn(
         update_step_id = str(uuid.uuid4())
         emit_step(update_step_id, "running", "Updating Google Calendar event", current["summary"])
         try:
+            ensure_turn_active()
             updated = service.events().patch(
                 calendarId="primary",
                 eventId=event_id,
@@ -1166,6 +1186,7 @@ def run_agent_turn(
         delete_step_id = str(uuid.uuid4())
         emit_step(delete_step_id, "running", "Cancelling Google Calendar event", current["summary"])
         try:
+            ensure_turn_active()
             service.events().delete(
                 calendarId="primary",
                 eventId=event_id,
@@ -1435,6 +1456,7 @@ def run_agent_turn(
             return sheets_tool_error(step_id, "Could not create spreadsheet", HTTPException(status_code=422, detail="Spreadsheet and worksheet titles cannot be empty."))
         try:
             sheets_service, _ = sheets_clients()
+            ensure_turn_active()
             created = sheets_service.spreadsheets().create(
                 body={
                     "properties": {"title": title.strip()},
@@ -1447,6 +1469,7 @@ def run_agent_turn(
             data = ([headers] if headers else []) + (rows or [])
             requests = []
             if data:
+                ensure_turn_active()
                 sheets_service.spreadsheets().values().update(
                     spreadsheetId=spreadsheet_id,
                     range=quoted_sheet_range(sheet_name.strip(), "A1"),
@@ -1468,6 +1491,7 @@ def run_agent_turn(
                         }
                     }
                 ]
+            ensure_turn_active()
             sheets_service.spreadsheets().batchUpdate(
                 spreadsheetId=spreadsheet_id,
                 body={"requests": requests},
@@ -1504,6 +1528,7 @@ def run_agent_turn(
             tab = find_sheet_tab(metadata, parsed_sheet)
             actual_range = resolve_sheet_range(range_name, tab["title"])
             if action == "clear":
+                ensure_turn_active()
                 sheets_service.spreadsheets().values().clear(
                     spreadsheetId=spreadsheet_id,
                     range=actual_range,
@@ -1513,6 +1538,7 @@ def run_agent_turn(
                 if not values:
                     raise HTTPException(status_code=422, detail="Provide cell values for update or append.")
                 if action == "update":
+                    ensure_turn_active()
                     result = sheets_service.spreadsheets().values().update(
                         spreadsheetId=spreadsheet_id,
                         range=actual_range,
@@ -1520,6 +1546,7 @@ def run_agent_turn(
                         body={"values": values},
                     ).execute()
                 else:
+                    ensure_turn_active()
                     result = sheets_service.spreadsheets().values().append(
                         spreadsheetId=spreadsheet_id,
                         range=actual_range,
@@ -1574,6 +1601,7 @@ def run_agent_turn(
                     if len(metadata.get("sheets", [])) <= 1:
                         raise HTTPException(status_code=422, detail="A spreadsheet must keep at least one worksheet.")
                     requests = [{"deleteSheet": {"sheetId": tab["sheetId"]}}]
+            ensure_turn_active()
             sheets_service.spreadsheets().batchUpdate(
                 spreadsheetId=spreadsheet_id,
                 body={"requests": requests},
@@ -1629,6 +1657,7 @@ def run_agent_turn(
                 }]
             else:
                 raise HTTPException(status_code=422, detail="Unsupported spreadsheet format type.")
+            ensure_turn_active()
             sheets_service.spreadsheets().batchUpdate(
                 spreadsheetId=spreadsheet_id,
                 body={"requests": requests},
@@ -1669,6 +1698,7 @@ def run_agent_turn(
                 if target_range["endRowIndex"] - target_range["startRowIndex"] <= 1:
                     raise HTTPException(status_code=422, detail="A range needs at least one data row below its header.")
                 target_range["startRowIndex"] += 1
+            ensure_turn_active()
             sheets_service.spreadsheets().batchUpdate(
                 spreadsheetId=spreadsheet_id,
                 body={"requests": [{
@@ -1707,6 +1737,7 @@ def run_agent_turn(
                 if enabled
                 else {"clearBasicFilter": {"sheetId": tab["sheetId"]}}
             )
+            ensure_turn_active()
             sheets_service.spreadsheets().batchUpdate(
                 spreadsheetId=spreadsheet_id,
                 body={"requests": [request]},
@@ -1784,6 +1815,7 @@ def run_agent_turn(
                     }
                 },
             }
+            ensure_turn_active()
             sheets_service.spreadsheets().batchUpdate(
                 spreadsheetId=spreadsheet_id,
                 body={"requests": [{"addChart": {"chart": chart}}]},
@@ -1848,6 +1880,7 @@ def run_agent_turn(
                 format_name,
                 sheet_name,
             )
+            ensure_turn_active()
             link = store_sheet_download(content, filename, content_type)
         except (HttpError, HTTPException, ValueError, KeyError) as error:
             return sheets_tool_error(step_id, "Could not export spreadsheet", error)
@@ -1931,6 +1964,7 @@ def run_agent_turn(
         granted_emails = []
         for email in clean_emails:
             try:
+                ensure_turn_active()
                 drive_service.permissions().create(
                     fileId=spreadsheet_id,
                     body={"type": "user", "role": role_map[role], "emailAddress": email},
@@ -1954,6 +1988,7 @@ def run_agent_turn(
             failed_emails = []
             for email in clean_emails:
                 try:
+                    ensure_turn_active()
                     message = EmailMessage()
                     _set_sender_headers(message, display_name, user_email)
                     message["To"] = email
@@ -2066,6 +2101,7 @@ def run_agent_turn(
         change_step_id = str(uuid.uuid4())
         emit_step(change_step_id, "running", f"{'Changing' if action == 'change' else 'Removing'} spreadsheet permission", email)
         try:
+            ensure_turn_active()
             if action == "change":
                 drive_service.permissions().update(
                     fileId=spreadsheet_id,
@@ -2184,15 +2220,30 @@ def run_agent_turn(
                         ],
                     ),
                 )
-                reply = chat.send_message(user_message)
+                reply_text = ""
+                response_stream = chat.send_message_stream(user_message)
+                for chunk in response_stream:
+                    if cancellation_event.is_set():
+                        response_stream.close()
+                        emit_step(thinking_step_id, "completed", "Stopped")
+                        return
+                    chunk_text = chunk.text or ""
+                    if chunk_text:
+                        reply_text += chunk_text
+                        loop.call_soon_threadsafe(
+                            event_queue.put_nowait,
+                            format_sse("message_delta", {"text": chunk_text}),
+                        )
                 if cancellation_event.is_set():
                     emit_step(thinking_step_id, "completed", "Stopped")
                     return
-                reply_text = reply.text or ""
                 duration_sec = max(1, int(time.time() - start_ts))
 
                 emit_step(thinking_step_id, "completed", "Done")
                 save_turn_to_mongodb(session_id, user_email, user_message, reply_text, turn_record, duration_sec)
+                if cancellation_event.is_set():
+                    emit_step(thinking_step_id, "completed", "Stopped")
+                    return
 
                 loop.call_soon_threadsafe(
                     event_queue.put_nowait,
@@ -2201,7 +2252,14 @@ def run_agent_turn(
                 return
             except Exception as e:
                 last_error = e
+                if cancellation_event.is_set():
+                    emit_step(thinking_step_id, "completed", "Stopped")
+                    return
                 if "503" in str(e) or "UNAVAILABLE" in str(e):
+                    loop.call_soon_threadsafe(
+                        event_queue.put_nowait,
+                        format_sse("message_reset", {}),
+                    )
                     emit_step(thinking_step_id, "running", f"Model {model_name} busy, switching...")
                     time.sleep(1)
                     continue
@@ -2414,7 +2472,7 @@ async def stop_chat_turn(req: ChatStopRequest):
         if not record or record["user_email"] != user_email.lower():
             raise HTTPException(status_code=404, detail="This chat response is no longer running.")
         record["cancellation_event"].set()
-    return {"stopped": True}
+    return {"stop_requested": True}
 
 
 @app.post("/api/approve")
