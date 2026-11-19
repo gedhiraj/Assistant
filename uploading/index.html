@@ -81,6 +81,56 @@
     .markdown-body tr:hover td {
       background: #1a1a1a;
     }
+    .markdown-body a.sheets-action-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0;
+      padding: 8px 12px;
+      border: 1px solid #326b43;
+      border-radius: 8px;
+      background: #15251a;
+      color: #7ee787;
+      font-size: 12px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease;
+    }
+    .markdown-body a.sheets-action-link::before {
+      font-size: 15px;
+      line-height: 1;
+    }
+    .markdown-body a.sheets-download-link::before { content: "↓"; }
+    .markdown-body a.sheets-open-link::before { content: "↗"; }
+    .markdown-body a.sheets-action-link:hover {
+      border-color: #3fb950;
+      background: #1b3322;
+      transform: translateY(-1px);
+    }
+    .markdown-body a.sheets-action-link:focus-visible {
+      outline: 2px solid #3fb950;
+      outline-offset: 2px;
+    }
+    .markdown-body .sheet-action-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+      margin: 0 0 12px;
+    }
+    .markdown-body .sheet-action-copy {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .markdown-body .sheet-action-buttons {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex: 0 0 auto;
+      margin-left: auto;
+    }
 
     .activity-list {
       display: flex;
@@ -471,12 +521,12 @@
               </span>
               <span class="text-[10px] text-[#5c5c5c]">Soon</span>
             </button>
-            <button onclick="showUpcomingNotice('Google Sheets')" class="w-full flex items-center justify-between px-2 py-1.5 rounded-md text-[#8a8a8a] hover:bg-[#1a1a1a] transition">
+            <button onclick="usePrompt('Find my Google Sheets files')" class="w-full flex items-center justify-between px-2 py-1.5 rounded-md text-[#9b9b9b] hover:bg-[#1d1d1d] hover:text-[#ececec] transition">
               <span class="flex items-center gap-2 truncate">
-                <span class="w-2 h-2 rounded-full bg-[#4a4a4a]"></span>
+                <span class="w-2 h-2 rounded-full bg-[#3fb950]"></span>
                 <span class="truncate">Google Sheets</span>
               </span>
-              <span class="text-[10px] text-[#5c5c5c]">Soon</span>
+              <span class="text-[10px] text-[#3fb950]">Chat</span>
             </button>
           </div>
         </div>
@@ -919,6 +969,52 @@
         .replace(/"/g, "&quot;");
     }
 
+    function renderChatMarkdown(text) {
+      const template = document.createElement("template");
+      template.innerHTML = marked.parse(text || "");
+      const appOrigin = new URL(API_BASE).origin;
+      template.content.querySelectorAll("a[href]").forEach((link) => {
+        let url;
+        try {
+          url = new URL(link.getAttribute("href"), API_BASE);
+        } catch {
+          return;
+        }
+
+        if (url.origin === appOrigin && url.pathname.startsWith("/api/sheets/download/")) {
+          link.classList.add("sheets-action-link", "sheets-download-link");
+          link.textContent = "Download";
+          link.setAttribute("download", "");
+        } else if (
+          url.protocol === "https:"
+          && url.hostname.toLowerCase() === "docs.google.com"
+          && url.pathname.startsWith("/spreadsheets/")
+        ) {
+          link.classList.add("sheets-action-link", "sheets-open-link");
+          link.textContent = "Open";
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+        }
+      });
+      template.content.querySelectorAll("p").forEach((paragraph) => {
+        const actionLinks = Array.from(paragraph.querySelectorAll("a.sheets-action-link"));
+        if (!actionLinks.length) return;
+
+        const row = document.createElement("div");
+        row.className = "sheet-action-row";
+        const copy = paragraph.cloneNode(true);
+        copy.className = "sheet-action-copy";
+        copy.querySelectorAll("a.sheets-action-link").forEach((link) => link.remove());
+        const buttons = document.createElement("span");
+        buttons.className = "sheet-action-buttons";
+        actionLinks.forEach((link) => buttons.appendChild(link));
+        if (copy.textContent.trim()) row.appendChild(copy);
+        row.appendChild(buttons);
+        paragraph.replaceWith(row);
+      });
+      return template.innerHTML;
+    }
+
     function renderActivityStep(step) {
       const label = String(step.label || "Working...");
       const detail = String(step.detail || "");
@@ -940,6 +1036,8 @@
         kind = "manage";
       } else if (/calendar|event/.test(searchText)) {
         kind = "calendar";
+      } else if (/spreadsheet|google sheets|sheet|chart|export/.test(searchText)) {
+        kind = "sheets";
       } else if (/fetch|inbox|email|search|query/.test(searchText)) {
         kind = "inbox";
       }
@@ -948,6 +1046,7 @@
         thinking: { color: "#a371f7", path: '<path d="M12 3v2m0 14v2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42M3 12h2m14 0h2M5.64 18.36l1.42-1.42m9.88-9.88 1.42-1.42"/><circle cx="12" cy="12" r="4"/>' },
         inbox: { color: "#58a6ff", path: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>' },
         calendar: { color: "#79c0ff", path: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M16 2v4M8 2v4M3 9h18"/><path d="M8 13h.01M12 13h.01M16 13h.01M8 17h.01M12 17h.01"/>' },
+        sheets: { color: "#3fb950", path: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>' },
         draft: { color: "#d2a8ff", path: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/>' },
         send: { color: "#3fb950", path: '<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>' },
         permission: { color: "#d29922", path: '<path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z"/><path d="m9 12 2 2 4-4"/>' },
@@ -1079,7 +1178,7 @@
         </div>
         <div class="activity-list text-xs">${stepsHtml}</div>
         ${approvalsHtml ? `<div class="space-y-2">${approvalsHtml}</div>` : ""}
-        <div class="markdown-body pt-1">${marked.parse(msg.assistant_reply || "")}</div>
+        <div class="markdown-body pt-1">${renderChatMarkdown(msg.assistant_reply || "")}</div>
       `;
       return turn;
     }
@@ -1180,6 +1279,7 @@
 
       const isEmail = data.action_type === "send_email" || data.action_type === "reply_to_email";
       const isCalendar = ["calendar_create", "calendar_update", "calendar_delete"].includes(data.action_type);
+      const isSheets = ["sheets_share", "sheets_permission"].includes(data.action_type);
       const allDayCalendarEvent = Boolean(data.preview.start?.date);
       const calendarApprovalLabel = {
         calendar_create: "Approve & create event",
@@ -1191,6 +1291,11 @@
         calendar_update: "Review Calendar changes",
         calendar_delete: "Review Calendar cancellation",
       }[data.action_type];
+      const sheetsApprovalLabel = data.action_type === "sheets_share"
+        ? "Approve & share"
+        : data.preview.action === "Remove permission"
+        ? "Approve access removal"
+        : "Approve permission change";
       const headerLabel =
         data.action_type === "send_email"
           ? "Review email draft"
@@ -1198,6 +1303,8 @@
           ? "Review thread reply"
           : isCalendar
           ? calendarReviewLabel
+          : isSheets
+          ? data.action_type === "sheets_share" ? "Review spreadsheet sharing" : "Review spreadsheet permission"
           : `Review action (${data.preview.action})`;
 
       if (isEmail) {
@@ -1231,6 +1338,19 @@
             ${data.preview.description ? `<div class="whitespace-pre-wrap break-words text-[#b8b8b8]">${escapeHtml(data.preview.description)}</div>` : ""}
             ${data.preview.attendees?.length ? `<div class="break-all text-[#b8b8b8]"><span class="text-[#858585]">Guests:</span> ${data.preview.attendees.map(escapeHtml).join(", ")}</div>` : `<div class="text-[#858585]">No guests</div>`}
             <p class="pt-1 text-[11px] text-[#d29922]">Guests will be notified after you approve, where applicable.</p>
+          </div>
+        `
+        : isSheets
+        ? `
+          <div class="p-4 border-b border-[#262626] space-y-2 text-xs">
+            <div class="font-medium text-[#ececec]">${escapeHtml(data.preview.spreadsheet_title)}</div>
+            <div class="text-[#b8b8b8]"><span class="text-[#858585]">Action:</span> ${escapeHtml(data.preview.action)}</div>
+            ${data.preview.email_addresses?.length ? `<div class="break-all text-[#b8b8b8]"><span class="text-[#858585]">People:</span> ${data.preview.email_addresses.map(escapeHtml).join(", ")}</div>` : ""}
+            ${data.preview.role ? `<div class="text-[#b8b8b8]"><span class="text-[#858585]">New access:</span> ${escapeHtml(data.preview.role)}</div>` : ""}
+            ${data.preview.current_role ? `<div class="text-[#b8b8b8]"><span class="text-[#858585]">Current access:</span> ${escapeHtml(data.preview.current_role)}</div>` : ""}
+            ${data.preview.delivery ? `<div class="text-[#b8b8b8]"><span class="text-[#858585]">Delivery:</span> ${escapeHtml(data.preview.delivery)}${data.preview.attachment_format ? ` · ${escapeHtml(data.preview.attachment_format)}` : ""}</div>` : ""}
+            ${data.preview.spreadsheet_url ? `<a class="inline-block text-[#58a6ff] hover:underline" href="${escapeHtml(data.preview.spreadsheet_url)}" target="_blank" rel="noopener noreferrer">Open spreadsheet</a>` : ""}
+            <p class="pt-1 text-[11px] text-[#d29922]">Only the named people listed above will receive this access.</p>
           </div>
         `
         : `
@@ -1274,7 +1394,7 @@
         <div class="px-4 py-2.5 bg-[#1c1c1c] border-b border-[#262626] flex items-center justify-between">
           <span class="text-xs font-semibold text-[#ececec]">${headerLabel}</span>
           <div class="flex items-center gap-3">
-            <span class="text-[11px] text-[#3fb950] font-medium">${isCalendar ? "Confirmation required" : "Permission required"}</span>
+            <span class="text-[11px] text-[#3fb950] font-medium">${isCalendar || isSheets ? "Confirmation required" : "Permission required"}</span>
           </div>
         </div>
         ${summaryBlock}
@@ -1282,7 +1402,7 @@
         <div class="approval-options divide-y divide-[#242424] text-xs">
           <button onclick="submitApproval('${data.approval_id}', 'allow_once')" class="w-full px-4 py-2.5 text-left hover:bg-[#222222] transition flex items-center gap-3 text-[#ececec]">
             <span class="text-[#7d7d7d] font-mono">1.</span>
-            <span>${isCalendar ? calendarApprovalLabel : isEmail ? "Allow once and send now" : "Confirm and continue"}</span>
+            <span>${isCalendar ? calendarApprovalLabel : isSheets ? sheetsApprovalLabel : isEmail ? "Allow once and send now" : "Confirm and continue"}</span>
           </button>
           ${
             data.recipient
@@ -1294,7 +1414,7 @@
           }
           <button onclick="submitApproval('${data.approval_id}', 'deny')" class="w-full px-4 py-2.5 text-left hover:bg-[#222222] transition flex items-center gap-3 text-[#9b9b9b]">
             <span class="text-[#7d7d7d] font-mono">${data.recipient ? "3." : "2."}</span>
-            <span>${isCalendar ? "Cancel request" : "Cancel and keep as draft"}</span>
+            <span>${isCalendar || isSheets ? "Cancel request" : "Cancel and keep as draft"}</span>
           </button>
         </div>
         <div class="approval-footer px-4 py-2.5 bg-[#141414] border-t border-[#262626] flex items-center justify-end gap-2">
@@ -1303,7 +1423,7 @@
             Cancel <span class="text-[10px] text-[#7d7d7d] ml-1">Esc</span>
           </button>
           <button onclick="submitApproval('${data.approval_id}', 'allow_once')" class="px-3 py-1 rounded-md bg-[#238636] hover:bg-[#2ea043] text-xs font-medium text-white transition">
-            ${isCalendar ? escapeHtml(calendarApprovalLabel) : isEmail ? "Approve &amp; send" : "Approve action"} <span class="text-[10px] opacity-80 ml-1">↵</span>
+            ${isCalendar ? escapeHtml(calendarApprovalLabel) : isSheets ? escapeHtml(sheetsApprovalLabel) : isEmail ? "Approve &amp; send" : "Approve action"} <span class="text-[10px] opacity-80 ml-1">↵</span>
           </button>
         </div>
       `;
@@ -1436,7 +1556,7 @@
         const footer = card.querySelector(".approval-footer");
         const statusText =
           decision === "allow_once"
-            ? card.dataset.actionType.startsWith("calendar_") ? "Approved" : "Approved (Allow once)"
+            ? /^(?:calendar|sheets)_/.test(card.dataset.actionType) ? "Approved" : "Approved (Allow once)"
             : decision === "allow_always"
             ? "Approved (Allow always saved to MongoDB)"
             : "Cancelled by user";
@@ -1529,7 +1649,7 @@
             } else if (payload.type === "message") {
               const replySlot = turnEl.querySelector(".reply-slot");
               replySlot.classList.remove("hidden");
-              replySlot.innerHTML = marked.parse(payload.text || "");
+              replySlot.innerHTML = renderChatMarkdown(payload.text || "");
               scrollToBottom();
             } else if (payload.type === "error") {
               const replySlot = turnEl.querySelector(".reply-slot");
