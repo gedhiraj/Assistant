@@ -1,344 +1,369 @@
-Because you already enabled the **`gmail.modify`** scope in `D25`, your assistant isn't limited to just sending emails—it can read full email bodies, search your inbox using Gmail filters, summarize today's messages, draft replies inside existing threads, mark emails as read, and organize labels.
+# D25 – AI-Powered Google Workspace Assistant
 
-### What You Can Ask D25 Once You Add Gmail Reader & Manager Tools
+An intelligent AI-powered personal productivity assistant that integrates **Gmail, Google Calendar, and Google Sheets** into a unified conversational interface.
 
-Right now, `assistant.py` only fetches the **subjects** of your last 5 emails at startup and has one tool (`send_email`). By adding a few Gmail tools to `assistant.py`, you can ask D25 things like:
+D25 helps users manage emails, organize schedules, work with spreadsheets, and automate everyday productivity tasks using natural language.
 
-* **Summarize today's or recent emails:** *"Summarize all emails I received today and list the key action items."* or *"Read and summarize my last 5 emails."*
-* **Search specific senders, topics, or attachments:** *"Find all emails from Oracle or GitHub this week and summarize them."* or *"Check if I got any interview emails today."*
-* **Read full email details:** *"Open the latest email from Rahul and give me the exact meeting link and time."*
-* **Reply directly inside an email thread:** *"Reply to the latest email from gedhiraj@gmail.com saying I received it and will share the update by tomorrow."* (keeps the `Re:` subject and thread history intact).
-* **Create drafts without sending:** *"Save a draft email to my manager about Friday's leave so I can review it in Gmail later."*
-* **Clean up your inbox:** *"Mark all promotional or unread emails from yesterday as read"* or *"Archive the last 3 emails from LinkedIn."*
+The goal is to build a unified AI workspace where users can interact with multiple Google services through a single chatbot interface.
 
 ---
 
-### Upgraded `assistant.py` (Full Gmail Read, Search, Summarize, Reply & Cleanup Tools)
+## 1. Project Overview
 
-Replace your `assistant.py` with this upgraded version—it keeps your human-style HTML email template and adds **`get_emails`**, **`reply_to_email`**, and **`mark_emails_read`** to Gemini's toolset:
+D25 is designed to simplify everyday productivity by bringing essential Google Workspace services together.
 
-```python
-import os
-import time
-import html
-import base64
-import datetime
-from email.message import EmailMessage
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
+Instead of switching between Gmail, Calendar, and Sheets, users can simply communicate with D25 to perform tasks, retrieve information, and manage their workflows.
 
-load_dotenv()
+### Core Objectives
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
-TOKEN_FILE = os.getenv("GOOGLE_TOKEN_FILE", "token.json")
+- Simplify email management through natural language.
+- Automate calendar and scheduling operations.
+- Interact with Google Sheets without manually navigating spreadsheets.
+- Enable cross-application workflows.
+- Provide a conversational AI experience with contextual understanding.
+- Maintain user control through approval-based actions.
 
-if not GEMINI_API_KEY:
-    raise ValueError("Missing GEMINI_API_KEY in .env file.")
+---
 
-SCOPES = [
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/tasks",
-    "https://www.googleapis.com/auth/contacts.readonly",
-]
+## 2. Current Features and Capabilities
 
-FALLBACK_MODELS = [
-    "gemini-3.5-flash-lite",
-    "gemini-3.8-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-flash-latest",
-]
+### 2.1 Gmail Integration
 
+D25 provides email management capabilities through Gmail.
 
-def get_google_credentials() -> Credentials:
-    creds = None
-    if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+**Implemented functionality:**
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(TOKEN_FILE, "w") as token:
-            token.write(creds.to_json())
+- Search emails in the Primary Inbox.
+- Retrieve and summarize email conversations.
+- Draft new emails.
+- Send emails with user approval.
+- Reply to existing email threads.
+- Mark emails as read or unread.
+- Archive emails.
+- Move emails to Trash.
+- Preview email content within the chat interface.
+- Trusted-recipient management for streamlined sending approvals.
 
-    return creds
+**Example commands:**
 
+- "Show my latest unread emails."
+- "Summarize my recent emails."
+- "Draft a follow-up email to HR."
+- "Reply to this email confirming my availability."
+- "Archive the completed conversations."
 
-CREDS = get_google_credentials()
-GMAIL_SERVICE = build("gmail", "v1", credentials=CREDS)
-CALENDAR_SERVICE = build("calendar", "v3", credentials=CREDS)
-DRIVE_SERVICE = build("drive", "v3", credentials=CREDS)
-TASKS_SERVICE = build("tasks", "v1", credentials=CREDS)
+### 2.2 Google Calendar Integration
 
+D25 allows users to manage their schedules conversationally.
 
-def build_html_email(clean_body: str) -> str:
-    """Clean, native-looking editorial HTML that reads like a genuine 1-to-1 human email."""
-    paragraphs = [p.strip() for p in clean_body.split("\n\n") if p.strip()]
-    html_paragraphs = "".join(
-        f'<p style="margin: 0 0 16px 0; line-height: 1.65; color: #1f2328; font-size: 15px;">'
-        f'{html.escape(p).replace(chr(10), "<br>")}</p>'
-        for p in paragraphs
-    )
+**Implemented functionality:**
 
-    return f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 32px 24px; background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
-  <table width="100%" cellpadding="0" cellspacing="0" border="0">
-    <tr>
-      <td align="left">
-        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 580px;">
-          <tr>
-            <td>
-              {html_paragraphs}
-              <p style="margin: 28px 0 0 0; font-size: 15px; font-weight: 600; color: #111827;">Dhiraj Kumar</p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"""
+- Retrieve upcoming calendar events.
+- Search for existing events.
+- Create calendar events.
+- Update existing events.
+- Cancel calendar events.
+- Approval-based calendar modifications.
 
+**Example commands:**
 
-def _extract_email_body(payload: dict) -> str:
-    """Extracts plain-text body content from a Gmail message payload."""
-    if "parts" in payload:
-        for part in payload["parts"]:
-            if part.get("mimeType") == "text/plain" and "data" in part.get("body", {}):
-                return base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="replace")
-            if "parts" in part:
-                nested = _extract_email_body(part)
-                if nested:
-                    return nested
-    elif "data" in payload.get("body", {}):
-        return base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8", errors="replace")
-    return ""
+- "Show my meetings for tomorrow."
+- "What is my schedule this week?"
+- "Schedule a meeting for Friday at 3 PM."
+- "Reschedule my afternoon meeting."
+- "Cancel the meeting scheduled for tomorrow."
 
+### 2.3 Google Sheets Integration
 
-def get_emails(query: str = "", max_results: int = 5) -> list[dict]:
-    """Fetches and reads emails from Gmail using optional Gmail search queries.
+D25 provides spreadsheet management through natural language.
 
-    Args:
-        query: Gmail search filter (e.g., 'newer_than:1d' for today's mail, 'is:unread', 'from:gedhiraj@gmail.com', or '' for latest emails).
-        max_results: Number of emails to retrieve (default 5, max 15).
-    """
-    max_results = min(max(1, max_results), 15)
-    response = GMAIL_SERVICE.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
-    messages = response.get("messages", [])
+**Implemented functionality:**
 
-    if not messages:
-        return [{"info": f"No emails found matching query: '{query}'"}]
+- Find Google spreadsheets.
+- Read spreadsheet data.
+- Create new spreadsheets.
+- Edit spreadsheet values.
+- Create and manage spreadsheet tabs.
+- Format spreadsheet cells.
+- Sort spreadsheet data.
+- Apply filters.
+- Generate charts.
+- Export spreadsheet files.
+- Manage sharing permissions for named users.
+- Open and download spreadsheet files.
 
-    results = []
-    for m in messages:
-        detail = GMAIL_SERVICE.users().messages().get(userId="me", id=m["id"], format="full").execute()
-        headers = detail.get("payload", {}).get("headers", [])
-        subject = next((h["value"] for h in headers if h["name"] == "Subject"), "(No Subject)")
-        sender = next((h["value"] for h in headers if h["name"] == "From"), "Unknown")
-        date = next((h["value"] for h in headers if h["name"] == "Date"), "")
-        message_id_header = next((h["value"] for h in headers if h["name"] == "Message-ID"), "")
-        body_text = _extract_email_body(detail.get("payload", {})) or detail.get("snippet", "")
+**Example commands:**
 
-        results.append({
-            "id": m["id"],
-            "threadId": detail.get("threadId"),
-            "message_id_header": message_id_header,
-            "from": sender,
-            "date": date,
-            "subject": subject,
-            "body": body_text[:2500],  # Trim overly long newsletters
-        })
-    return results
+- "Find my monthly expense spreadsheet."
+- "Create a new sales tracking sheet."
+- "Add these records to the spreadsheet."
+- "Sort the data by revenue."
+- "Create a chart showing monthly sales."
+- "Export this spreadsheet."
 
+---
 
-def send_email(to_email: str, subject: str, body: str) -> str:
-    """Drafts and sends a new clean HTML + plain-text email via Gmail.
+## 3. Chat Interface and User Experience
 
-    Args:
-        to_email: The recipient's email address.
-        subject: A concise, natural, sentence-case subject line.
-        body: Concise, polite, natural body text (do NOT include sign-off; the HTML template adds it automatically).
-    """
-    clean_body = body.replace("\\n", "\n").strip()
-    clean_subject = subject.strip()
+D25 includes a conversational interface designed for everyday productivity.
 
-    print("\n" + "=" * 55, flush=True)
-    print("EMAIL DRAFT PREVIEW", flush=True)
-    print("=" * 55, flush=True)
-    print(f"To:      {to_email}", flush=True)
-    print(f"Subject: {clean_subject}", flush=True)
-    print("-" * 55, flush=True)
-    print(clean_body, flush=True)
-    print("\nDhiraj Kumar", flush=True)
-    print("=" * 55, flush=True)
+**Current UI features:**
 
-    confirm = input("Approve and send this email? (y/n): ").strip().lower()
-    if confirm != "y":
-        return "Email cancelled by user. Ask if they want any edits."
+- Responsive chatbot interface.
+- Streaming AI responses.
+- Activity indicators and execution steps.
+- Persistent chat sessions.
+- Saved conversation history.
+- Google account switching.
+- Stop-response functionality.
+- Email preview cards.
+- Approval cards for sensitive operations.
+- Trusted-recipient settings.
+- Spreadsheet Open and Download actions.
 
-    message = EmailMessage()
-    message["To"] = to_email
-    message["Subject"] = clean_subject
-    message.set_content(f"{clean_body}\n\nDhiraj Kumar")
-    message.add_alternative(build_html_email(clean_body), subtype="html")
+### Action Approval System
 
-    encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    GMAIL_SERVICE.users().messages().send(userId="me", body={"raw": encoded_message}).execute()
+D25 uses an approval-based approach for sensitive operations.
 
-    print("-> Email sent via Gmail API!", flush=True)
-    return f"Email successfully sent to {to_email} with subject '{clean_subject}'."
+Examples include:
+- Sending emails.
+- Modifying calendar events.
+- Performing mailbox changes.
 
+This ensures that users remain in control of important operations.
 
-def reply_to_email(message_id: str, body: str) -> str:
-    """Replies directly inside an existing Gmail thread after user approval.
+---
 
-    Args:
-        message_id: The Gmail message 'id' returned by `get_emails` that you are replying to.
-        body: Concise, polite reply text (do NOT include sign-off).
-    """
-    orig = GMAIL_SERVICE.users().messages().get(userId="me", id=message_id, format="metadata").execute()
-    headers = orig.get("payload", {}).get("headers", [])
-    orig_from = next((h["value"] for h in headers if h["name"] == "From"), "")
-    orig_subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
-    orig_msg_id = next((h["value"] for h in headers if h["name"] == "Message-ID"), "")
-    thread_id = orig.get("threadId")
+## 4. Technical Architecture
 
-    reply_subject = orig_subject if orig_subject.lower().startswith("re:") else f"Re: {orig_subject}"
-    clean_body = body.replace("\\n", "\n").strip()
+D25 is organized around a conversational AI backend, Google Workspace integrations, and a web-based frontend.
 
-    print("\n" + "=" * 55, flush=True)
-    print("REPLY DRAFT PREVIEW", flush=True)
-    print("=" * 55, flush=True)
-    print(f"To:      {orig_from}", flush=True)
-    print(f"Subject: {reply_subject}", flush=True)
-    print("-" * 55, flush=True)
-    print(clean_body, flush=True)
-    print("\nDhiraj Kumar", flush=True)
-    print("=" * 55, flush=True)
+### Main Components
 
-    confirm = input("Approve and send this reply? (y/n): ").strip().lower()
-    if confirm != "y":
-        return "Reply cancelled by user."
+| Component | Responsibility |
+|---|---|
+| `backend.py` | Main application backend, AI orchestration, tool execution and chat handling |
+| `index.html` | Frontend interface and conversational experience |
+| `calendar_tools.py` | Google Calendar integration |
+| `sheets_tools.py` | Google Sheets operations |
+| Gmail tools | Email retrieval, drafting, sending and mailbox management |
+| OAuth | Google account authentication and authorization |
 
-    message = EmailMessage()
-    message["To"] = orig_from
-    message["Subject"] = reply_subject
-    if orig_msg_id:
-        message["In-Reply-To"] = orig_msg_id
-        message["References"] = orig_msg_id
+### Architecture Overview
 
-    message.set_content(f"{clean_body}\n\nDhiraj Kumar")
-    message.add_alternative(build_html_email(clean_body), subtype="html")
+User → Web Chat Interface → Backend → AI Model → Tool Selection → Google Workspace APIs → Results → Chat Interface
 
-    encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    GMAIL_SERVICE.users().messages().send(
-        userId="me", body={"raw": encoded_message, "threadId": thread_id}
-    ).execute()
+The backend coordinates requests, executes the relevant tools, handles approvals, and returns results to the user.
 
-    print("-> Reply sent in thread!", flush=True)
-    return f"Reply sent to {orig_from} on thread '{reply_subject}'."
+---
 
+# 5. Planned Enhancements – Copilot-Inspired Experience
 
-def mark_emails_read(message_ids: list[str]) -> str:
-    """Marks one or more Gmail messages as read.
+The next development phase focuses on making D25 more intelligent, contextual, proactive, and capable of handling multi-step workflows.
 
-    Args:
-        message_ids: List of Gmail message IDs to mark as read.
-    """
-    if not message_ids:
-        return "No message IDs provided."
-    GMAIL_SERVICE.users().messages().batchModify(
-        userId="me",
-        body={"ids": message_ids, "removeLabelIds": ["UNREAD"]},
-    ).execute()
-    return f"Marked {len(message_ids)} email(s) as read."
+The inspiration comes from interaction patterns found in AI assistants such as GitHub Copilot, adapted for Google Workspace productivity rather than software development.
 
+### 5.1 Ask / Plan / Act Modes
 
-def send_with_fallback(ai_client: genai.Client, system_prompt: str, history: list, user_input: str):
-    last_error = None
-    for model_name in FALLBACK_MODELS:
-        try:
-            chat = ai_client.chats.create(
-                model=model_name,
-                history=history,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    tools=[get_emails, send_email, reply_to_email, mark_emails_read],
-                ),
-            )
-            reply = chat.send_message(user_input)
-            return reply.text, chat.get_history()
-        except Exception as e:
-            last_error = e
-            if "503" in str(e) or "UNAVAILABLE" in str(e):
-                print(f"({model_name} busy, switching model...)", flush=True)
-                time.sleep(1)
-                continue
-            raise e
-    raise last_error
+Introduce three interaction modes.
 
+**ASK MODE**
 
-def main():
-    ai_client = genai.Client(api_key=GEMINI_API_KEY)
-    today_str = datetime.date.today().strftime("%Y/%m/%d")
+For information retrieval and general questions.
 
-    system_prompt = f"""
-    You are D25, the personal AI assistant for Dhiraj Kumar. Today's date is {today_str}.
+Examples:
+- "What meetings do I have tomorrow?"
+- "Summarize my latest emails."
+- "Find the latest sales report."
 
-    GMAIL CAPABILITIES & RULES:
-    - Use `get_emails` whenever the user asks to read, search, or summarize emails.
-      * For "today's emails", pass `query="after:{today_str}"` (or `query="newer_than:1d"`).
-      * For "last 5 emails", pass `query=""` and `max_results=5`.
-      * For unread emails, pass `query="is:unread"`.
-    - When summarizing emails, highlight the sender, core topic, and any deadlines or action items in crisp bullet points.
-    - When sending (`send_email`) or replying (`reply_to_email`), write like a natural, polite human—no AI clichés ("I hope this email finds you well", "pleased to confirm", etc.), use natural contractions, keep it concise to the user's exact points, and NEVER add "Dhiraj Kumar" at the end of `body` (the HTML template adds it automatically).
-    """
+**PLAN MODE**
 
-    history = []
-    print("D25 Gmail Assistant is ready! Type 'exit' to quit.", flush=True)
-    while True:
-        user_input = input("\nYou: ").strip()
-        if user_input.lower() in {"exit", "quit"}:
-            break
-        if not user_input:
-            continue
+For planning complex operations before execution.
 
-        print("D25 is thinking...", flush=True)
-        try:
-            reply_text, history = send_with_fallback(ai_client, system_prompt, history, user_input)
-            print(f"\nD25: {reply_text}", flush=True)
-        except Exception as e:
-            print(f"\n[Error]: {e}", flush=True)
+Examples:
+- "Organize my schedule for next week."
+- "Prepare a follow-up plan for pending emails."
+- "Analyze my spreadsheet and suggest improvements."
 
+The assistant should:
+1. Understand the request.
+2. Break it into actionable steps.
+3. Identify the required Google services.
+4. Present a proposed execution plan.
+5. Wait for user confirmation where necessary.
 
-if __name__ == "__main__":
-    main()
+**ACT MODE**
 
-```
+For executing approved workflows.
 
-### Try These Prompts Right Away:
+Examples:
+- "Create calendar events based on these emails."
+- "Send follow-up emails to the selected contacts."
+- "Update my spreadsheet with the latest information."
 
-1. `"Summarize my last 5 emails with the key points."`
-2. `"Summarize all emails I received today and highlight anything urgent."`
-3. `"Check my unread emails and mark the promotional ones as read."`
-4. `"Reply to the latest email from gedhiraj@gmail.com saying thanks, I got your reply."`
+The assistant executes the approved steps and reports the results.
 
-The web chatbot can also work with Google Calendar in the conversation. Try asking it to show upcoming events, schedule a meeting, reschedule an event, or cancel one. Calendar changes are previewed in the chat and require your approval before guests are notified.
+### 5.2 Context Mentions (@Gmail, @Calendar, @Sheets)
 
-The web chatbot can also search, read, create, format, and update Google Sheets, manage worksheet tabs, sort/filter data, create charts, and export files as XLSX, CSV, PDF, DOCX, or PPTX. Sharing is restricted to named people and requires approval in the chat.
+Make the existing @ and & composer hints functional.
+
+Allow users to explicitly select the context they want the AI to use.
+
+Potential context options:
+
+- `@Gmail` – Use email conversations and mailbox information.
+- `@Calendar` – Use calendar events and schedules.
+- `@Sheets` – Use spreadsheet data.
+- `@Chat` – Reference saved conversations.
+
+This will improve contextual accuracy and reduce unnecessary tool calls.
+
+### 5.3 Google Tasks Integration
+
+Introduce Google Tasks as another productivity integration.
+
+**Planned functionality:**
+
+- Create tasks.
+- Retrieve task lists.
+- Update tasks.
+- Mark tasks as completed.
+- Delete tasks.
+- Set due dates.
+- Organize tasks into lists.
+- Track pending tasks and reminders.
+
+Example:
+"Create a task to follow up with HR tomorrow."
+
+Note: The application already requests the Google Tasks OAuth scope, but dedicated Tasks tools still need to be implemented and integrated into the chat toolset.
+
+### 5.4 Source Cards and Grounded Responses
+
+Improve transparency by displaying the source behind AI-generated answers.
+
+Examples:
+
+- Email source cards with subject, sender and date.
+- Calendar cards with event details.
+- Spreadsheet cards with file names and relevant data.
+- Direct links to the original Google Workspace resources.
+
+This allows users to verify information without searching manually.
+
+### 5.5 Saved Instructions and Preferences
+
+Introduce persistent user preferences and instructions.
+
+Examples:
+
+- Preferred email writing tone.
+- Default calendar.
+- Timezone preferences.
+- Frequently used recipients.
+- Preferred response format.
+- Personal productivity instructions.
+
+Users should be able to view, update, and clear these preferences.
+
+### 5.6 Cross-Application Workflows
+
+Allow D25 to connect multiple Google services within one request.
+
+Example workflow:
+
+**Email → Calendar Event**
+
+1. Read an email containing meeting details.
+2. Extract the date, time and participants.
+3. Prepare a calendar event.
+4. Show the proposed event.
+5. Request approval.
+6. Create the event.
+7. Confirm successful completion.
+
+Other examples:
+
+- Convert an email into a Google Task.
+- Extract email attachments and organize information in Sheets.
+- Generate a spreadsheet from email information.
+- Create calendar reminders from pending tasks.
+- Prepare follow-up emails based on previous conversations.
+
+### 5.7 Action History and Undo
+
+Introduce a centralized activity history.
+
+Planned functionality:
+
+- View previously executed actions.
+- Track the date and time of operations.
+- Display the Google service involved.
+- Show execution status.
+- Record user approvals.
+- Provide undo functionality where supported by the underlying Google service.
+
+---
+
+# 6. Development Roadmap
+
+| Priority | Feature | Status |
+|---|---|---|
+| 1 | Gmail Integration | Implemented |
+| 2 | Google Calendar Integration | Implemented |
+| 3 | Google Sheets Integration | Implemented |
+| 4 | Approval-Based Actions | Implemented |
+| 5 | Chat Session Management | Implemented |
+| 6 | Ask / Plan / Act Modes | Planned |
+| 7 | Functional Context Mentions | Planned |
+| 8 | Source Cards | Planned |
+| 9 | Google Tasks Integration | Planned |
+| 10 | Saved User Preferences | Planned |
+| 11 | Cross-App Workflows | Planned |
+| 12 | Action History and Undo | Planned |
+
+---
+
+# 7. Future Vision
+
+The long-term vision is to transform D25 from a conversational Google Workspace assistant into a comprehensive personal productivity agent.
+
+Potential future capabilities include:
+
+- Intelligent daily planning.
+- Automated email follow-ups.
+- Meeting preparation.
+- Task prioritization.
+- Spreadsheet analysis and reporting.
+- Context-aware recommendations.
+- Multi-step workflow automation.
+- Personalized productivity insights.
+- Proactive notifications and reminders.
+
+The assistant should eventually understand the user's work context, identify pending actions, recommend next steps, and execute approved tasks across connected services.
+
+---
+
+# 8. Project Philosophy
+
+D25 is built around four principles:
+
+**1. Unified Experience**
+
+Access multiple productivity tools from one conversational interface.
+
+**2. Contextual Intelligence**
+
+Understand user intent and retrieve relevant information from connected services.
+
+**3. Controlled Automation**
+
+Keep users informed and in control of sensitive actions.
+
+**4. Practical Productivity**
+
+Focus on reducing repetitive work and saving time through intelligent automation.
+
+---
+
+**D25 – One Assistant. Multiple Workspaces. Smarter Productivity.**
